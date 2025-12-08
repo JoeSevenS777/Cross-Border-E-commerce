@@ -1,9 +1,3 @@
- (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
-diff --git a/README.md b/README.md
-index fb01db1ecf44fdeb8cae146173cda28186638ef8..3e1f75704a9c8a0b0c2195ec5de7e272d09f1d44 100644
---- a/README.md
-+++ b/README.md
-@@ -1,2 +1,27 @@
 -# bigseller-scrape-cleanup
 -One-click cleanup for BigSeller scraped products: CN→TW title conversion, clear short description, limit long-description images to 12.
 +# BigSeller Scrape Cleanup Userscript
