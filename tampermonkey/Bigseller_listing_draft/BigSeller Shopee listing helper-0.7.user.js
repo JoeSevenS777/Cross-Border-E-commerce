@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         BigSeller Shopee Title Prefix Helper
 // @namespace    https://joe.bigseller.helper
-// @version      0.8
-// @description  Add store-based prefixes to Shopee product titles on BigSeller edit pages, with smart Chinese spacing, description template, MD5 click, SKU normalize, and title tweak tools.
+// @version      0.95
+// @description  Shopee listing helper on BigSeller: title prefixes, description templates, SKU normalize, MD5, and variant name conversion.
 // @match        https://www.bigseller.pro/web/listing/shopee/edit/*
 // @run-at       document-idle
 // @grant        none
@@ -90,7 +90,6 @@
 
   // ===================== UTILITIES =====================
 
-  // 简体转繁体（简易版降级）
   const SIMPLE_TO_TRAD = {
     '烟': '煙',
     '乌': '烏',
@@ -156,10 +155,6 @@
     return s.split('').map((ch) => SIMPLE_TO_TRAD[ch] || ch).join('');
   }
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
   function textNormalize(str) {
     return (str || '').replace(/\s+/g, '').trim();
   }
@@ -170,10 +165,9 @@
       document.querySelectorAll('label, .el-form-item__label, .ivu-form-item-label, .ant-form-item-label')
     );
 
-    // 1) 根据 label 文本模糊匹配
     for (const label of labels) {
       const txt = textNormalize(label.textContent || '');
-      if (!txt.includes(target)) continue; // 支持 “产品名称 *” 之类
+      if (!txt.includes(target)) continue;
 
       const item =
         label.closest('.el-form-item, .ivu-form-item, .ant-form-item, .form-group') || label.parentElement;
@@ -186,7 +180,6 @@
       if (field) return field;
     }
 
-    // 2) 兜底：遍历所有输入框，向上找包含目标文字的父节点
     const allFields = Array.from(document.querySelectorAll('input, select, textarea'));
     for (const field of allFields) {
       let parent = field.parentElement;
@@ -201,7 +194,6 @@
   }
 
   function getShopName() {
-    // 1) 新版 antd Select：div[autoid="store_button"]
     let rendered = null;
 
     const antContainers = Array.from(document.querySelectorAll('div[autoid="store_button"]'));
@@ -216,7 +208,6 @@
       }
     }
 
-    // 2) 通过表单项 label = 店铺
     if (!rendered) {
       const formItems = Array.from(document.querySelectorAll('.ant-form-item'));
       for (const item of formItems) {
@@ -241,7 +232,6 @@
       return name;
     }
 
-    // 3) 旧版：label + select/input
     const shopField = findFieldByLabelText(LABEL_SHOP, ['select', 'input']);
     if (shopField) {
       if (shopField.tagName === 'SELECT') {
@@ -256,6 +246,54 @@
 
   function getTitleField() {
     return findFieldByLabelText(LABEL_TITLE, ['input', 'textarea']);
+  }
+
+  function getParentSkuInput() {
+    let input = document.querySelector('input[autoid="parent_sku_text"]');
+    if (input) return input;
+
+    input = findFieldByLabelText('父SKU', ['input']) || findFieldByLabelText('主SKU', ['input']);
+    if (input) return input;
+
+    const candidates = Array.from(document.querySelectorAll('input[type="text"]'));
+    input = candidates.find((el) => {
+      const id = el.id || '';
+      const name = el.name || '';
+      const autoid = el.getAttribute('autoid') || '';
+      return /parent[_-]?sku/i.test(id) || /parent[_-]?sku/i.test(name) || /parent[_-]?sku/i.test(autoid);
+    });
+
+    return input || null;
+  }
+
+  // Small async helper
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // Collect ALL text-like fields (main doc + same-origin iframes)
+  function getAllTextFields() {
+    const result = [];
+    function collect(doc) {
+      try {
+        const fields = Array.from(doc.querySelectorAll('input[type="text"], textarea'));
+        result.push(...fields);
+        const iframes = Array.from(doc.querySelectorAll('iframe'));
+        iframes.forEach((iframe) => {
+          try {
+            if (iframe.contentDocument) {
+              collect(iframe.contentDocument);
+            }
+          } catch (e) {
+            // cross-origin, ignore
+          }
+        });
+      } catch (e) {
+        // safety net
+      }
+    }
+    collect(document);
+    return result;
   }
 
   // ===================== CHINESE SPACING =====================
@@ -312,7 +350,6 @@
     if (!title) return '';
     const trimmed = title.trim();
 
-    // 把前面的英文品牌单独拿出来
     let brand = '';
     let rest = trimmed;
     const brandMatch = trimmed.match(/^[A-Za-z][A-Za-z0-9\s&-]*/);
@@ -325,7 +362,7 @@
     if (brand) tokens.push(brand);
 
     let buffer = '';
-    let currentType = null; // 'C' or 'O'
+    let currentType = null;
 
     function flush() {
       if (!buffer) return;
@@ -376,17 +413,14 @@
   }
 
   function getDescriptionField() {
-    // 0) CKEditor iframe
     const ckIframe = document.querySelector('iframe.cke_wysiwyg_frame');
     if (ckIframe && ckIframe.contentDocument && ckIframe.contentDocument.body) {
       return ckIframe.contentDocument.body;
     }
 
-    // 1) textarea via label
     const viaLabel = findFieldByLabelText('产品描述', ['textarea']);
     if (viaLabel) return viaLabel;
 
-    // 2) via AI button
     const aiSpan = document.querySelector(
       'span[title*="产品描述"], span[title*="產品描述"], span[title*="生成产品描述"], span[title*="生成產品描述"]'
     );
@@ -411,7 +445,6 @@
       }
     }
 
-    // 3) via left title
     const titleNodes = Array.from(
       document.querySelectorAll('.chat_pull_left.title, .page_edit_item .title, .com_card_head .title, .com_card_head')
     );
@@ -441,7 +474,6 @@
     const CURRENT_SUFFIX = cfg.descSuffix || '';
     const { prefixes: ALL_PREFIXES, suffixes: ALL_SUFFIXES } = getAllDescriptionTemplates();
 
-    // TEXTAREA / INPUT 模式
     if (field.tagName === 'TEXTAREA' || field.tagName === 'INPUT') {
       let text = field.value || '';
 
@@ -465,7 +497,6 @@
       return;
     }
 
-    // 富文本模式
     const doc = field.ownerDocument || document;
     const imgs = field.querySelectorAll('img');
     let middleHtml = '';
@@ -496,35 +527,98 @@
     field.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
-  // ===================== COLOR VARIANT HELPER =====================
+  // ===================== COLOR VARIANT HELPER (SKU转繁体) =====================
 
   async function convertColorOptionsToTraditional() {
     await loadOpenCC();
 
-    const allEditLinks = Array.from(document.querySelectorAll('a.custom_item_edit'));
-    if (!allEditLinks.length) {
-      console.warn('[Title Helper] 未找到颜色编辑按钮');
+    // 掃描主 document + 所有同源 iframe + 所有 open shadowRoot，收集搜索根節點
+    function collectSearchRoots() {
+      const roots = [];
+      const seen = new Set();
+      const stack = [document];
+
+      while (stack.length) {
+        const node = stack.pop();
+        if (!node || seen.has(node)) continue;
+        seen.add(node);
+
+        const isDoc = node.nodeType === 9; // Document
+        const base = isDoc ? (node.body || node) : node; // ShadowRoot 直接當根
+        if (base && typeof base.querySelectorAll === 'function') {
+          roots.push(base);
+
+          // 在當前樹中尋找所有 iframe -> 其 contentDocument 也入棧
+          const iframes = Array.from(base.querySelectorAll('iframe'));
+          for (const iframe of iframes) {
+            try {
+              if (iframe.contentDocument) stack.push(iframe.contentDocument);
+            } catch (e) {
+              // 跨域忽略
+            }
+          }
+
+          // 掃描所有元素，若存在 shadowRoot，則將 shadowRoot 入棧
+          const allEls = Array.from(base.querySelectorAll('*'));
+          for (const el of allEls) {
+            if (el.shadowRoot) {
+              stack.push(el.shadowRoot);
+            }
+          }
+        }
+      }
+      return roots;
+    }
+
+    const roots = collectSearchRoots();
+
+    // 1) 在所有 roots 裡收集鉛筆按鈕 / 圖標
+    const btnSet = new Set();
+
+    const BTN_SELECTOR =
+      'a.custom_item_edit, a[autoid^="variation_second_name_edit_"], i[autoid^="variation_second_name_edit_"]';
+
+    for (const root of roots) {
+      if (!root) continue;
+
+      // 直接匹配鉛筆
+      root.querySelectorAll(BTN_SELECTOR).forEach((el) => btnSet.add(el));
+
+      // 從名稱 span 出發，再在同一行尋找按鈕，兼容 class 變動
+      root
+        .querySelectorAll('span[autoid^="variation_second_name_text_"]')
+        .forEach((span) => {
+          const row = span.closest('div') || span.parentElement;
+          if (!row) return;
+          const btn =
+            row.querySelector(BTN_SELECTOR) ||
+            row.querySelector('a, i');
+          if (btn) btnSet.add(btn);
+        });
+    }
+
+    const allButtons = Array.from(btnSet);
+
+    if (!allButtons.length) {
+      console.warn('[Title Helper] 未找到顏色/規格名稱的編輯按鈕 (custom_item_edit / bsicon_edit1)');
       return;
     }
 
-    const editLinks = allEditLinks.filter((link) => {
-      const container =
-        link.closest('.variation_second_name_text_0') ||
-        link.parentElement ||
-        link.closest('span, div, td');
-      const txt = (container && container.textContent) ? container.textContent.trim() : '';
-      return txt.includes('#');
-    });
+    let processedCount = 0;
 
-    if (!editLinks.length) return;
+    for (const editBtn of allButtons) {
+      // 點擊鉛筆，打開彈窗；使用元素所在的 root document/shadowRoot
+      const rootNode = editBtn.getRootNode && editBtn.getRootNode();
+      const docLike = rootNode && rootNode.querySelectorAll ? rootNode : document;
 
-    for (const link of editLinks) {
-      link.click();
-      await sleep(150);
+      editBtn.click();
+      await sleep(220);
 
-      const popup = document.querySelector(
-        'div.bs_antd_textarea_box.textareaBox[style*="position: absolute"]'
+      // 彈窗：兼容不同樣式，只取最後一個（最新彈出的）
+      const popupCandidates = Array.from(
+        docLike.querySelectorAll('div.bs_antd_textarea_box.textareaBox, div.bs_antd_textarea_box')
       );
+      const popup = popupCandidates[popupCandidates.length - 1];
       if (!popup) continue;
 
       const textarea =
@@ -533,22 +627,25 @@
       if (!textarea) continue;
 
       const orig = (textarea.value || '').trim();
-      if (!orig.includes('#')) {
-        const okBtnSkip = popup.querySelector('button.ant-btn.ant-btn-primary');
-        if (okBtnSkip) okBtnSkip.click();
-        await sleep(120);
+      if (!orig) {
+        const okBtnEmpty =
+          popup.querySelector('button.ant-btn.ant-btn-primary') ||
+          popup.querySelector('button');
+        if (okBtnEmpty) okBtnEmpty.click();
+        await sleep(140);
         continue;
       }
 
+      // 若包含色號編碼，如 "CP365-01#蔷薇烟"，先規整為 "01#蔷薇烟"
       let simplified = orig;
       const hashIndex = simplified.indexOf('#');
       if (hashIndex !== -1) {
-        const beforeHash = simplified.slice(0, hashIndex);
-        const afterHash = simplified.slice(hashIndex + 1);
+        const beforeHash = simplified.slice(0, hashIndex); // 例如 "CP365-01"
+        const afterHash = simplified.slice(hashIndex + 1); // 例如 "蔷薇烟"
         let code = beforeHash;
         const dashIdx = code.indexOf('-');
         if (dashIdx !== -1) {
-          code = code.slice(dashIdx + 1);
+          code = code.slice(dashIdx + 1); // 只保留 "01"
         }
         simplified = code + '#' + afterHash;
       }
@@ -559,13 +656,19 @@
         textarea.value = converted;
         textarea.dispatchEvent(new Event('input', { bubbles: true }));
         textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        processedCount++;
       }
 
-      const okBtn = popup.querySelector('button.ant-btn.ant-btn-primary');
+      const okBtn =
+        popup.querySelector('button.ant-btn.ant-btn-primary') ||
+        popup.querySelector('div.btn_box button') ||
+        popup.querySelector('button');
       if (okBtn) okBtn.click();
 
-      await sleep(150);
+      await sleep(180);
     }
+
+    console.log('[Title Helper] SKU轉繁體已完成，處理欄位數量:', processedCount);
   }
 
   // ===================== SKU NORMALIZATION =====================
@@ -573,14 +676,27 @@
   function updateSkuWithParent(parentSku) {
     if (!parentSku) return;
 
-    const allFields = Array.from(document.querySelectorAll('input, textarea'));
+    // 只在銷售區塊 (saleInfo) 內搜尋，避免誤傷「產品名稱」等其他輸入框
+    const saleInfo = document.querySelector('div[data-anchor="saleInfo"]');
+    const scope = saleInfo || document;
 
+    const parentSkuInput = getParentSkuInput();
+
+    const allFields = Array.from(scope.querySelectorAll('input[type="text"], textarea'));
+
+    // SKU 欄通常較長，maxLength 比顏色大，或本身內容較長
     const skuFields = allFields.filter((el) => {
-      const v = (el.value || '').trim();
-      return v && v.includes('#');
+      if (parentSkuInput && el === parentSkuInput) return false; // 排除父 SKU
+      const ml = el.maxLength;
+      const val = (el.value || '').trim();
+      if (!val) return false;
+      return ml === -1 || ml > 30 || val.length > 20;
     });
 
-    if (!skuFields.length) return;
+    if (!skuFields.length) {
+      console.warn('[Title Helper] 未找到SKU輸入框 (saleInfo 區塊內的 text/textarea, maxLength>30)');
+      return;
+    }
 
     const weightSuffixRe = /-?[0-9]+(?:\.[0-9]+)?\s*(?:g|kg|ml|l|L|G|KG|ML)\s*$/i;
 
@@ -590,7 +706,7 @@
 
       val = val.replace(weightSuffixRe, '').trim();
 
-      if (!val.startsWith(parentSku)) {
+      if (!val.startsWith(parentSku + '-')) {
         val = parentSku + '-' + val;
       }
 
@@ -598,12 +714,20 @@
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
     });
+
+    console.log('[Title Helper] 合成SKU已完成，處理欄位數量:', skuFields.length);
   }
 
   // ===================== TITLE PREFIX CORE =====================
 
+  function getStoreConfigSafe(storeNameOverride) {
+    const actualShopName = getShopName();
+    const effectiveStore = storeNameOverride || actualShopName;
+    return STORE_CONFIG[effectiveStore] || STORE_CONFIG['墨墨優選'];
+  }
+
   function applyPrefix(storeNameOverride) {
-    const cfg = getStoreConfig(storeNameOverride);
+    const cfg = getStoreConfigSafe(storeNameOverride);
     if (!cfg || !cfg.titlePrefix) return;
 
     const STANDARD_PREFIX = cfg.titlePrefix;
@@ -614,18 +738,14 @@
     const oldVal = titleField.value || '';
     let text = oldVal.trimStart();
 
-    // 已经是该店铺的标准前缀：不处理
     if (text.startsWith(STANDARD_PREFIX)) {
       return;
     }
 
-    // 处理各种旧形式的「台灣現貨」前缀
     const idx = text.indexOf('台灣現貨');
     if (idx !== -1 && idx <= 4) {
-      // 从「台灣現貨」末尾开始
       let prefixEnd = idx + '台灣現貨'.length;
 
-      // 吃掉紧跟其后的空格 + 非中文非字母非数字（通常是 emoji 或符号）
       while (prefixEnd < text.length) {
         const ch = text[prefixEnd];
         if (/\s/.test(ch)) {
@@ -642,7 +762,6 @@
       const after = text.slice(prefixEnd).trimStart();
       text = STANDARD_PREFIX + after;
     } else {
-      // 没有任何「台灣現貨」 → 直接加标准前缀
       text = STANDARD_PREFIX + text;
     }
 
@@ -661,7 +780,6 @@
     const raw = (titleField.value || '').trim();
     if (!raw) return;
 
-    // 检测当前使用的前缀（4 家店里任意一个）
     let usedPrefix = '';
     for (const cfg of Object.values(STORE_CONFIG)) {
       const p = cfg.titlePrefix;
@@ -772,7 +890,6 @@
 
     panel.appendChild(btnApply);
 
-    // 中间：标题微调 下拉（选择即生效）
     const tweakSelect = document.createElement('select');
     tweakSelect.style.display = 'block';
     tweakSelect.style.width = '100%';
@@ -789,10 +906,9 @@
     });
     panel.appendChild(tweakSelect);
 
-    // 第二个按钮：仅负责 SKU 规范化
-    const btnMd5 = document.createElement('button');
-    btnMd5.textContent = '合成SKU';
-    Object.assign(btnMd5.style, {
+    const btnSku = document.createElement('button');
+    btnSku.textContent = '合成SKU';
+    Object.assign(btnSku.style, {
       display: 'block',
       width: '100%',
       marginTop: '4px',
@@ -803,23 +919,22 @@
       background: '#ffecec',
     });
 
-    btnMd5.addEventListener('click', () => {
-      const parentSkuInput = document.querySelector('input[autoid="parent_sku_text"]');
+    btnSku.addEventListener('click', () => {
+      const parentSkuInput = getParentSkuInput();
       const parentSku = parentSkuInput ? (parentSkuInput.value || '').trim() : '';
 
       if (!parentSku) {
+        console.warn('[Title Helper] 未找到父SKU輸入框或父SKU為空');
         refreshShopLabel();
         return;
       }
 
       updateSkuWithParent(parentSku);
-
       refreshShopLabel();
     });
 
-    panel.appendChild(btnMd5);
+    panel.appendChild(btnSku);
 
-    // 第三个按钮：SKU转繁体
     const btnColor = document.createElement('button');
     btnColor.textContent = 'SKU转繁体';
     Object.assign(btnColor.style, {
