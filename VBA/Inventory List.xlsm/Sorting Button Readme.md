@@ -1,131 +1,121 @@
-Excel Protected Sheet Header Sorting System
-Reliable Sorting + Colour-Like Sorting for the “action” Column
+# Excel Protected Sheet Sorting System  
+Automated Sorting Workflow for Excel Tables on Protected Sheets
 
-This project provides an Excel VBA module that enables:
+![Excel](https://img.shields.io/badge/Excel-Automation-217346?style=for-the-badge&logo=microsoft-excel&logoColor=white)
+![VBA](https://img.shields.io/badge/Language-VBA-yellow?style=for-the-badge)
+![Sorting](https://img.shields.io/badge/Feature-Header%20Sorting-blue?style=for-the-badge)
+![ActionSort](https://img.shields.io/badge/Action%20Column-Colour%20Sort-orange?style=for-the-badge)
+![Protected](https://img.shields.io/badge/Protected%20Sheet-Supported-success?style=for-the-badge)
+![Status](https://img.shields.io/badge/Status-Stable-brightgreen?style=for-the-badge)
 
-Sorting on protected sheets
+A VBA module that brings modern, reliable sorting to Excel protected sheets.  
+It includes header sort buttons, full-table sorting logic, and colour-like sorting for conditional formatting in the **action** column.
 
-Clickable ▼ sort buttons in every header
+---
 
-Full-table sorting that always detects the correct data range
+## ✨ Features
 
-Colour-like sorting for the action column (works even with conditional formatting colours)
+### **1. Clickable Header Sort Buttons (▼)**
+- Automatically created with `SetupHeaderSortButtons`
+- One button per header cell  
+- Sorts on protected sheets  
+- Alternates ASC / DESC for normal columns  
 
-✨ Features Overview
-1. Header Sort Buttons (▼)
+### **2. Full-Range Sorting Engine**
+The macro automatically detects:
+- The last used header column  
+- The deepest used row **across ALL columns**  
 
-Automatically created using SetupHeaderSortButtons
+This ensures sorting always covers the entire dataset — never partial.
 
-One button per header cell
+### **3. Colour-Like Sorting for the `action` Column**
+Excel cannot natively sort by conditional-format colours.  
+This system simulates colour sorting:
 
-Runs on protected sheets
+1. User selects a coloured cell in the **action** column  
+2. User clicks the ▼ button  
+3. Macro reads `DisplayFormat.Interior.Color`  
+4. A temporary key assigns:
+   - Matching colour → **1**  
+   - Other colours → **2**  
+5. Table is sorted by this key  
+6. Temporary helper is removed  
 
-Toggles ascending/descending sorting for normal columns
+Used for:
+- Red → *place order*  
+- Green → *Check12days / check*  
+- Neutral statuses  
 
-2. Full-Range Table Sorting
+### **4. Buttons Always Sort the Correct Column**
+Buttons map to their column using:
 
-The system dynamically detects the table’s true dimensions:
+`TopLeftCell.Column`
 
-Finds the last used column in the header row
+This makes the system **immune to column moves, insertions, and deletions**.
 
-Scans all table columns to find the deepest used row
+### **5. Protected-Sheet Compatible**
+Sheets are protected with:
+- Sorting allowed  
+- Filtering allowed  
+- UserInterfaceOnly = True  
 
-Always sorts the entire dataset, even if some columns have blank areas
+All formulas and locked cells stay protected.
 
-3. Colour-Like Sorting for the “action” Column
+---
 
-Excel cannot sort by conditional-format colours — this module solves it.
+## 🛠 Installation
 
-How it works:
+1. Open Excel → press **ALT + F11**  
+2. Insert a **Standard Module**  
+3. Paste the VBA source code  
+4. Adjust settings if needed:
+   - `HEADER_ROW`
+   - `DATA_FIRST_COL`
+   - `PWD`  
 
-User clicks a coloured cell (red/green) in the action column
+5. Run: `SetupHeaderSortButtons`  
+   → Automatically installs new ▼ header buttons  
 
-User clicks the ▼ button on the action header
+---
 
-VBA reads the displayed cell colour
+## 🚀 Usage
 
-A temporary key column is created
+### **Normal Sorting (any column except action)**
+Click the ▼:
+- First click → ascending  
+- Second click → descending  
 
-Rows matching the selected colour → key = 1
+### **Colour-Like Sorting (action column)**
+1. Select a coloured cell in the action column  
+2. Click the ▼ on the action header  
+3. Rows with the same displayed colour move to the top  
 
-All other rows → key = 2
+---
 
-The entire table is sorted with key = 1 rows first
+## 🔁 When Table Structure Changes
 
-Temporary key column is cleared
+If you:
+- Add/remove columns  
+- Edit header titles  
+- Rearrange the table  
 
-This produces intuitive colour-group sorting without relying on Excel's unreliable colour sort engine.
+Re-run: `SetupHeaderSortButtons`  
+→ Old ▼ buttons are removed and rebuilt correctly.
 
-4. Buttons Always Map to the Correct Column
+---
 
-Instead of depending on button names (which break when columns move), the macro determines the column by:
+## ✔ Why This System Is Better
 
-Reading the button’s TopLeftCell.Column
+| Excel Limitation | This Module Solves It |
+|------------------|------------------------|
+| Cannot sort protected sheets | Auto-unprotect → sort → re-protect |
+| Cannot sort by CF colour | Uses simulated colour ranking |
+| Sorting sometimes ignores lower rows | Deepest-row detection across all columns |
+| Button breaks after column changes | Uses physical button position, not name |
+| Duplicate/misaligned buttons | Auto-cleanup inside SetupHeaderSortButtons |
 
-This ensures correct behaviour even after column insertions or deletions.
+---
 
-5. Sheet Protection Fully Supported
+## 📄 License
+MIT License — free for personal and commercial automation projects.
 
-The sheet is automatically protected using settings that allow:
-
-Sorting
-
-Filtering
-
-VBA operations
-
-while keeping user edits restricted.
-
-🛠 Installation
-
-Press ALT + F11 to open the VBA editor
-
-Insert a new Standard Module
-
-Paste the VBA code from this repository
-
-Adjust configuration constants if needed:
-
-HEADER_ROW = row number of header
-DATA_FIRST_COL = first column of the table
-PWD = optional protection password
-
-Run SetupHeaderSortButtons to generate the ▼ buttons
-
-🚀 How to Use
-Normal Sorting (any column except action)
-
-Click the ▼ in the header.
-
-First click → ascending
-
-Second click → descending
-
-Colour-Like Sorting (action column only)
-
-Step 1: Click a coloured action cell (red/green)
-Step 2: Click the ▼ in the action header
-
-Rows with the selected colour move to the top.
-
-🔁 Updating Headers
-
-If you add, remove, or edit header cells:
-
-Run SetupHeaderSortButtons again
-
-Old buttons are auto-deleted
-
-New buttons are auto-created and aligned
-
-✔ Why This System Is Better
-Problem in Native Excel	How This Module Fixes It
-Cannot sort protected sheets	VBA unprotects → sorts → re-protects automatically
-Cannot sort by conditional formatting colours	Reads actual displayed colour and uses a helper key
-Sorting only partially affects the table	Scans all columns to find the deepest used row
-Buttons break when columns move	Buttons detect true column by position, not name
-Duplicate/misaligned buttons	Setup automatically deletes all old buttons
-📄 License
-
-MIT License
-Free for personal and commercial Excel automation projects.
