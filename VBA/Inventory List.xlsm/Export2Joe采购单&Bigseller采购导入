@@ -1,0 +1,458 @@
+Option Explicit
+
+' ==========================================================
+' Export place-order rows from sheets 【萌睫】 / 【采菁】
+' into:
+'   - Joe77采购单_萌睫yyyymmdd.xlsx      (same folder as this xlsm)
+'   - Bigseller采购导入_萌睫yyyymmdd.xlsx (same folder as this xlsm)
+'   - Joe77采购单_采菁yyyymmdd.xlsx      (D:\JoeProgramFiles\Automation\Batch_added_to_cart\)
+'   - Bigseller采购导入_采菁yyyymmdd.xlsx (same folder as this xlsm)
+'
+' Reuses the latest existing file with the same prefix (rename to today),
+' otherwise creates a new workbook with headers.
+'
+' Only runs when:
+'   - Active workbook = ThisWorkbook
+'   - Active sheet name = "萌睫" or "采菁"
+' ==========================================================
+
+' 当前运行生成的两个文件路径（根据激活工作表而定）
+Private gJoePath As String
+Private gImpPath As String
+
+Public Sub Joe采购单_Bigseller采购导入()
+    Dim ws As Worksheet
+    Dim scrn As Boolean, calc As XlCalculation, evt As Boolean
+    Dim resp As VbMsgBoxResult
+
+    gJoePath = ""
+    gImpPath = ""
+
+    ' Only allow running in this workbook
+    If ActiveWorkbook Is Nothing Then Exit Sub
+    If Not ActiveWorkbook Is ThisWorkbook Then
+        MsgBox "请在包含宏的工作簿中运行此宏。", vbExclamation
+        Exit Sub
+    End If
+
+    ' Workbook must be saved so ThisWorkbook.Path is valid
+    If Len(ThisWorkbook.Path) = 0 Then
+        MsgBox "当前工作簿尚未保存，请先保存后再运行此宏。", vbExclamation
+        Exit Sub
+    End If
+
+    Set ws = ActiveSheet
+    If ws.Name <> "萌睫" And ws.Name <> "采菁" Then
+        MsgBox "此宏只适用于工作表【萌睫】和【采菁】。", vbInformation
+        Exit Sub
+    End If
+
+    ' Speed up
+    scrn = Application.ScreenUpdating
+    calc = Application.Calculation
+    evt = Application.EnableEvents
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+    Application.EnableEvents = False
+
+    On Error GoTo CleanExit
+
+    If ws.Name = "萌睫" Then
+        Handle_MengJie ws
+    ElseIf ws.Name = "采菁" Then
+        Handle_CaiJing ws
+    End If
+
+CleanExit:
+    Application.ScreenUpdating = scrn
+    Application.Calculation = calc
+    Application.EnableEvents = evt
+
+    If Err.Number <> 0 Then
+        MsgBox "出错：" & Err.Number & " - " & Err.Description, vbCritical
+    Else
+        ' 只有在导出成功时才询问是否打开文件
+        resp = MsgBox("文件已全部生成。是否现在打开 Joe77采购单 和 Bigseller采购导入 文件？", _
+                      vbYesNo + vbQuestion, "完成")
+        If resp = vbYes Then
+            On Error Resume Next
+            If Len(gJoePath) > 0 And Dir(gJoePath) <> "" Then
+                Workbooks.Open gJoePath
+            End If
+            If Len(gImpPath) > 0 And Dir(gImpPath) <> "" Then
+                Workbooks.Open gImpPath
+            End If
+            On Error GoTo 0
+        End If
+    End If
+End Sub
+
+' ==========================================================
+' Helper: count how many rows have action = "place order"
+' ==========================================================
+Private Function CountPlaceOrder(ByVal ws As Worksheet) As Long
+    Dim actCol As Long, lastRow As Long, r As Long
+    Dim v As String
+
+    actCol = FindHeaderCol(ws, "action")
+    If actCol = 0 Then Exit Function
+
+    lastRow = ws.Cells(ws.Rows.Count, actCol).End(xlUp).Row
+    For r = 2 To lastRow
+        v = LCase$(Trim$(CStr(ws.Cells(r, actCol).Value)))
+        If v = "place order" Then
+            CountPlaceOrder = CountPlaceOrder + 1
+        End If
+    Next r
+End Function
+
+' ==========================================================
+' Helper: ensure there is a file with given prefix & today's date
+' ==========================================================
+Private Sub EnsureTodayFile(ByVal folderPath As String, _
+                            ByVal prefix As String, _
+                            ByVal todayName As String)
+    Dim todayFull As String
+    Dim f As String, oldFull As String
+
+    If Right$(folderPath, 1) <> "\" And Right$(folderPath, 1) <> "/" Then
+        folderPath = folderPath & Application.PathSeparator
+    End If
+
+    todayFull = folderPath & todayName
+
+    ' If today's file already exists, nothing to do
+    If Dir(todayFull) <> "" Then Exit Sub
+
+    ' Otherwise, look for any file with this prefix
+    f = Dir(folderPath & prefix & "*.xlsx")
+    If f <> "" Then
+        oldFull = folderPath & f
+        On Error Resume Next
+        Name oldFull As todayFull      ' rename old file to today's name
+        On Error GoTo 0
+    End If
+End Sub
+
+' ==========================================================
+' 萌睫逻辑
+' ==========================================================
+Private Sub Handle_MengJie(ByVal ws As Worksheet)
+    Dim basePath As String, datePart As String
+    Dim joePrefix As String, impPrefix As String
+    Dim joeNameToday As String, impNameToday As String
+    Dim joePath As String, impPath As String
+    Dim cnt As Long
+
+    cnt = CountPlaceOrder(ws)
+    If cnt = 0 Then
+        MsgBox "【萌睫】中没有 ""place order"" 行，未生成任何文件。", vbInformation
+        Exit Sub
+    End If
+
+    basePath = ThisWorkbook.Path
+    datePart = Format(Date, "yyyymmdd")
+
+    joePrefix = "Joe77采购单_萌睫"
+    impPrefix = "Bigseller采购导入_萌睫"
+
+    joeNameToday = joePrefix & datePart & ".xlsx"
+    impNameToday = impPrefix & datePart & ".xlsx"
+
+    EnsureTodayFile basePath, joePrefix, joeNameToday
+    EnsureTodayFile basePath, impPrefix, impNameToday
+
+    joePath = basePath & Application.PathSeparator & joeNameToday
+    impPath = basePath & Application.PathSeparator & impNameToday
+
+    ' 记录本次生成的文件路径，供主过程弹窗后选择打开
+    gJoePath = joePath
+    gImpPath = impPath
+
+    Export_Mengjie_Joe77 ws, joePath
+    Export_ImportFile ws, impPath
+End Sub
+
+' 萌睫 → Joe77采购单_萌睫
+Private Sub Export_Mengjie_Joe77(ByVal wsSrc As Worksheet, ByVal filePath As String)
+    Dim wb As Workbook, ws As Worksheet
+    Dim linkCol As Long, attrCol As Long, qtyCol As Long, actCol As Long
+    Dim lastRow As Long, r As Long, dstRow As Long
+    Dim actVal As String
+    Dim tLinkCol As Long, tAttrCol As Long, tQtyCol As Long
+    Dim oldAlerts As Boolean
+
+    actCol = FindHeaderCol(wsSrc, "action")
+    linkCol = FindHeaderCol(wsSrc, "商品链接")
+    attrCol = FindHeaderCol(wsSrc, "属性SKU")
+    qtyCol = FindHeaderCol(wsSrc, "数量")
+
+    If actCol = 0 Or linkCol = 0 Or attrCol = 0 Or qtyCol = 0 Then
+        MsgBox "【萌睫】中未找到必要表头（action / 商品链接 / 属性SKU / 数量）。", vbCritical
+        Exit Sub
+    End If
+
+    If Dir(filePath) <> "" Then
+        Set wb = Workbooks.Open(filePath)
+        Set ws = wb.Worksheets(1)
+    Else
+        Set wb = Workbooks.Add(xlWBATWorksheet)
+        Set ws = wb.Worksheets(1)
+        ws.Cells(1, 1).Value = "商品链接"
+        ws.Cells(1, 2).Value = "属性SKU"
+        ws.Cells(1, 3).Value = "数量"
+    End If
+
+    tLinkCol = FindHeaderCol(ws, "商品链接")
+    tAttrCol = FindHeaderCol(ws, "属性SKU")
+    tQtyCol = FindHeaderCol(ws, "数量")
+    If tLinkCol = 0 Then tLinkCol = 1
+    If tAttrCol = 0 Then tAttrCol = 2
+    If tQtyCol = 0 Then tQtyCol = 3
+
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    If lastRow < 2 Then lastRow = 2
+    ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, 3)).ClearContents
+
+    ws.Cells(1, tLinkCol).Value = "商品链接"
+    ws.Cells(1, tAttrCol).Value = "属性SKU"
+    ws.Cells(1, tQtyCol).Value = "数量"
+
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, actCol).End(xlUp).Row
+    dstRow = 2
+    For r = 2 To lastRow
+        actVal = LCase$(Trim$(CStr(wsSrc.Cells(r, actCol).Value)))
+        If actVal = "place order" Then
+            ws.Cells(dstRow, tLinkCol).Value = wsSrc.Cells(r, linkCol).Value
+            ws.Cells(dstRow, tAttrCol).Value = wsSrc.Cells(r, attrCol).Value
+            ws.Cells(dstRow, tQtyCol).Value = wsSrc.Cells(r, qtyCol).Value
+            dstRow = dstRow + 1
+        End If
+    Next r
+
+    ws.Columns.AutoFit
+
+    oldAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    wb.SaveAs fileName:=filePath, FileFormat:=xlOpenXMLWorkbook
+    wb.Close SaveChanges:=False
+    Application.DisplayAlerts = oldAlerts
+End Sub
+
+' ==========================================================
+' 共用：导出到 Bigseller采购导入_xxxyyyymmdd.xlsx
+'   - 保存并关闭（不保持打开）
+' ==========================================================
+Private Sub Export_ImportFile(ByVal wsSrc As Worksheet, ByVal filePath As String)
+    Dim wb As Workbook, ws As Worksheet
+    Dim skuCol As Long, qtyCol As Long, actCol As Long
+    Dim lastRow As Long, dstRow As Long, r As Long
+    Dim actVal As String
+    Dim headers As Variant, i As Long
+    Dim oldAlerts As Boolean
+
+    actCol = FindHeaderCol(wsSrc, "action")
+    skuCol = FindHeaderCol(wsSrc, "SKU")
+    qtyCol = FindHeaderCol(wsSrc, "数量")
+
+    If actCol = 0 Or skuCol = 0 Or qtyCol = 0 Then
+        MsgBox wsSrc.Name & " 中未找到必要表头（action / SKU / 数量）。", vbCritical
+        Exit Sub
+    End If
+
+    If Dir(filePath) <> "" Then
+        Set wb = Workbooks.Open(filePath)
+        Set ws = wb.Worksheets(1)
+
+        lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+        If lastRow < 2 Then lastRow = 2
+        ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, 18)).ClearContents
+    Else
+        headers = Array( _
+            "*Provisional No.(Required)", _
+            "*SKU Name(Required)", _
+            "*Purchase Qty(Required)", _
+            "Unit Price", _
+            "Supplier", _
+            "Ship Fee", _
+            "Ship Fee Allocation Method (Price/Quantity/Volume/Weight)", _
+            "Other Fee", _
+            "Other Fee Allocation Method (Price/Quantity/Volume/Weight)", _
+            "Tax Fee", _
+            "Tax Fee Allocation Method (Price/Quantity/Volume/Weight)", _
+            "First-mile Ship Fee", _
+            "First-mile Ship Fee Allocation Method (Price/Quantity/Volume/Weight)", _
+            "Currency" & vbLf & "(Select from the options)", _
+            "Exchange Rate", _
+            "Tracking No.", _
+            "Estimated Arrival Date", _
+            "Note")
+
+        Set wb = Workbooks.Add(xlWBATWorksheet)
+        Set ws = wb.Worksheets(1)
+        For i = LBound(headers) To UBound(headers)
+            ws.Cells(1, i + 1).Value = headers(i)
+        Next i
+    End If
+
+    dstRow = 2
+    lastRow = wsSrc.Cells(ws.Rows.Count, actCol).End(xlUp).Row
+    For r = 2 To lastRow
+        actVal = LCase$(Trim$(CStr(wsSrc.Cells(r, actCol).Value)))
+        If actVal = "place order" Then
+            ws.Cells(dstRow, 1).Value = 1
+            ws.Cells(dstRow, 2).Value = wsSrc.Cells(r, skuCol).Value
+            ws.Cells(dstRow, 3).Value = wsSrc.Cells(r, qtyCol).Value
+            dstRow = dstRow + 1
+        End If
+    Next r
+
+    ws.Columns.AutoFit
+
+    oldAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    wb.SaveAs fileName:=filePath, FileFormat:=xlOpenXMLWorkbook
+    wb.Close SaveChanges:=False
+    Application.DisplayAlerts = oldAlerts
+End Sub
+
+' ==========================================================
+' 采菁逻辑
+' ==========================================================
+Private Sub Handle_CaiJing(ByVal ws As Worksheet)
+    Dim datePart As String
+    Dim basePath As String, cjPath As String
+    Dim joePrefix As String, impPrefix As String
+    Dim joeNameToday As String, impNameToday As String
+    Dim joePath As String, impPath As String
+    Dim cnt As Long
+
+    cnt = CountPlaceOrder(ws)
+    If cnt = 0 Then
+        MsgBox "【采菁】中没有 ""place order"" 行，未生成任何文件。", vbInformation
+        Exit Sub
+    End If
+
+    datePart = Format(Date, "yyyymmdd")
+    basePath = ThisWorkbook.Path
+
+    cjPath = "D:\JoeProgramFiles\Automation\Batch_added_to_cart"
+    If Dir(cjPath, vbDirectory) = "" Then
+        On Error Resume Next
+        MkDir cjPath
+        On Error GoTo 0
+    End If
+    If Right$(cjPath, 1) <> "\" And Right$(cjPath, 1) <> "/" Then
+        cjPath = cjPath & Application.PathSeparator
+    End If
+
+    joePrefix = "Joe77采购单_采菁"
+    impPrefix = "Bigseller采购导入_采菁"
+
+    joeNameToday = joePrefix & datePart & ".xlsx"
+    impNameToday = impPrefix & datePart & ".xlsx"
+
+    EnsureTodayFile cjPath, joePrefix, joeNameToday
+    EnsureTodayFile basePath, impPrefix, impNameToday
+
+    joePath = cjPath & joeNameToday
+    impPath = basePath & Application.PathSeparator & impNameToday
+
+    gJoePath = joePath
+    gImpPath = impPath
+
+    Export_Caijing_Joe77 ws, joePath
+    Export_ImportFile ws, impPath
+End Sub
+
+' 采菁 → Joe77采购单_采菁
+Private Sub Export_Caijing_Joe77(ByVal wsSrc As Worksheet, ByVal filePath As String)
+    Dim wb As Workbook, ws As Worksheet
+    Dim skuCol As Long, qtyCol As Long, linkCol As Long, prodIDCol As Long
+    Dim attrCol As Long, skuIDCol As Long, specIDCol As Long, suppCol As Long, actCol As Long
+    Dim lastRow As Long, dstRow As Long, r As Long, actVal As String
+    Dim oldAlerts As Boolean
+
+    actCol = FindHeaderCol(wsSrc, "action")
+    skuCol = FindHeaderCol(wsSrc, "SKU")
+    qtyCol = FindHeaderCol(wsSrc, "数量")
+    linkCol = FindHeaderCol(wsSrc, "商品链接")
+    prodIDCol = FindHeaderCol(wsSrc, "商品ID")
+    attrCol = FindHeaderCol(wsSrc, "属性SKU")
+    skuIDCol = FindHeaderCol(wsSrc, "sku ID")
+    specIDCol = FindHeaderCol(wsSrc, "Spec ID")
+    suppCol = FindHeaderCol(wsSrc, "供应商")
+
+    If actCol = 0 Or skuCol = 0 Or qtyCol = 0 Or linkCol = 0 Or _
+       prodIDCol = 0 Or attrCol = 0 Or skuIDCol = 0 Or specIDCol = 0 Or suppCol = 0 Then
+        MsgBox "【采菁】中未找到所有必需表头（action, SKU, 数量, 商品链接, 商品ID, 属性SKU, sku ID, Spec ID, 供应商）。", vbCritical
+        Exit Sub
+    End If
+
+    If Dir(filePath) <> "" Then
+        Set wb = Workbooks.Open(filePath)
+        Set ws = wb.Worksheets(1)
+
+        lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+        If lastRow < 2 Then lastRow = 2
+        ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, 8)).ClearContents
+    Else
+        Set wb = Workbooks.Add(xlWBATWorksheet)
+        Set ws = wb.Worksheets(1)
+        ws.Cells(1, 1).Value = "SKU"
+        ws.Cells(1, 2).Value = "数量"
+        ws.Cells(1, 3).Value = "商品链接"
+        ws.Cells(1, 4).Value = "商品ID"
+        ws.Cells(1, 5).Value = "属性SKU"
+        ws.Cells(1, 6).Value = "sku ID"
+        ws.Cells(1, 7).Value = "Spec ID"
+        ws.Cells(1, 8).Value = "供应商"
+    End If
+
+    dstRow = 2
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, actCol).End(xlUp).Row
+    For r = 2 To lastRow
+        actVal = LCase$(Trim$(CStr(wsSrc.Cells(r, actCol).Value)))
+        If actVal = "place order" Then
+            ws.Cells(dstRow, 1).Value = wsSrc.Cells(r, skuCol).Value
+            ws.Cells(dstRow, 2).Value = wsSrc.Cells(r, qtyCol).Value
+            ws.Cells(dstRow, 3).Value = wsSrc.Cells(r, linkCol).Value
+            ws.Cells(dstRow, 4).Value = wsSrc.Cells(r, prodIDCol).Value
+            ws.Cells(dstRow, 5).Value = wsSrc.Cells(r, attrCol).Value
+            ws.Cells(dstRow, 6).Value = wsSrc.Cells(r, skuIDCol).Value
+            ws.Cells(dstRow, 7).Value = wsSrc.Cells(r, specIDCol).Value
+            ws.Cells(dstRow, 8).Value = wsSrc.Cells(r, suppCol).Value
+            dstRow = dstRow + 1
+        End If
+    Next r
+
+    ws.Columns.AutoFit
+
+    oldAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    wb.SaveAs fileName:=filePath, FileFormat:=xlOpenXMLWorkbook
+    wb.Close SaveChanges:=False
+    Application.DisplayAlerts = oldAlerts
+End Sub
+
+' ==========================================================
+' Helper: find header column by text (row 1, case-insensitive)
+' ==========================================================
+Private Function FindHeaderCol(ByVal ws As Worksheet, ByVal headerText As String) As Long
+    Dim lastCol As Long, c As Long
+    Dim cellText As String
+
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    For c = 1 To lastCol
+        cellText = CStr(ws.Cells(1, c).Value)
+        cellText = Replace(cellText, vbCr, " ")
+        cellText = Replace(cellText, vbLf, " ")
+        cellText = Application.WorksheetFunction.Trim(cellText)
+        If StrComp(cellText, headerText, vbTextCompare) = 0 Then
+            FindHeaderCol = c
+            Exit Function
+        End If
+    Next c
+End Function
+
+
