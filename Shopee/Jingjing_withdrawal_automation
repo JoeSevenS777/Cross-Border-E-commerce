@@ -1,0 +1,264 @@
+Option Explicit
+
+' ======= COLUMN CONSTANTS (adjust if your layout changes) =======
+Const COL_ACCOUNT   As Long = 1      ' A
+Const COL_START     As Long = 2      ' B
+Const COL_END       As Long = 3      ' C
+Const COL_REVENUE   As Long = 4      ' D
+
+Const COL_PAY_FIRST As Long = 10     ' J  (transfer)
+Const COL_PAY_LAST  As Long = 15     ' O  (confirm)
+
+Const ROWS_PER_PERIOD As Long = 2    ' ck... + noso... = 2 rows per week
+
+' ================================================================
+' MAIN MACRO
+' - Does NOT modify existing rows.
+' - Only appends new rows for periods whose start date is
+'   later than the latest start-date already on the sheet.
+' - After appending, it "drags" J:O from the last existing period
+'   down to the new periods (row-blocks of 2).
+' ================================================================
+
+Sub ImportShopeeWithdrawals()
+    Dim wsSet As Worksheet
+    Dim folderCK As String, folderNoso As String
+    Dim lastRowBefore As Long, lastRowAfter As Long
+    Dim lastStartDate As Date
+    
+    Set wsSet = ThisWorkbook.Worksheets("Fee Deduction Calculation")
+    
+    folderCK = "C:\Users\zouzh\WPSDrive\1050756052\WPS云盘\提款\ck1808052"
+    folderNoso = "C:\Users\zouzh\WPSDrive\1050756052\WPS云盘\提款\noso1981"
+    
+    ' Remember last used row BEFORE we add anything
+    lastRowBefore = wsSet.Cells(wsSet.Rows.Count, COL_ACCOUNT).End(xlUp).Row
+    
+    ' Latest start date currently in column B
+    If lastRowBefore < 2 Then
+        lastStartDate = 0
+    Else
+        lastStartDate = Application.WorksheetFunction.Max( _
+                            wsSet.Range(wsSet.Cells(2, COL_START), _
+                                        wsSet.Cells(lastRowBefore, COL_START)))
+    End If
+    
+    ' Only process files whose start date is newer than lastStartDate
+    ProcessWalletFolder wsSet, folderCK, "ck180805", "ck1808052", lastStartDate
+    ProcessWalletFolder wsSet, folderNoso, "noso198", "noso1981", lastStartDate
+    
+    ' Now drag-fill J:O from the last old period down to new periods
+    lastRowAfter = wsSet.Cells(wsSet.Rows.Count, COL_ACCOUNT).End(xlUp).Row
+    If lastRowAfter > lastRowBefore Then
+        DragFillPayments wsSet, lastRowBefore, lastRowAfter
+        ClearLastMergedO wsSet, lastRowBefore, lastRowAfter
+    End If
+    
+    MsgBox "Shopee settlement import finished (old data untouched).", vbInformation
+End Sub
+
+' ================================================================
+' Process one folder (one Shopee account)
+' ================================================================
+
+Private Sub ProcessWalletFolder(wsSet As Worksheet, _
+                                ByVal folderPath As String, _
+                                ByVal acctPrefix As String, _
+                                ByVal baseAcct As String, _
+                                ByVal lastStartDate As Date)
+    Dim fileName As String
+    Dim parts() As String
+    Dim startStr As String, endStr As String
+    Dim startDate As Date, endDate As Date
+    Dim wbSrc As Workbook
+    Dim wsSrc As Worksheet
+    Dim totalOut As Double
+    
+    fileName = Dir(folderPath & "\*.xlsx")
+    Do While fileName <> ""
+        
+        ' Expect: something_YYYYMMDD_YYYYMMDD.xlsx
+        parts = Split(fileName, "_")
+        If UBound(parts) >= 2 Then
+            startStr = parts(1)                    ' e.g. 20250901
+            endStr = parts(2)                      ' e.g. 20250915.xlsx
+            endStr = Replace(endStr, ".xlsx", "")  ' e.g. 20250915
+            
+            startDate = DateSerial(Left$(startStr, 4), Mid$(startStr, 5, 2), Right$(startStr, 2))
+            endDate = DateSerial(Left$(endStr, 4), Mid$(endStr, 5, 2), Right$(endStr, 2))
+        Else
+            GoTo NextFile
+        End If
+        
+        ' Skip files whose period is not newer than the last existing one
+        If lastStartDate > 0 And startDate <= lastStartDate Then GoTo NextFile
+        
+        ' Open the weekly report and read 支出總計 (column E)
+        Set wbSrc = Workbooks.Open(folderPath & "\" & fileName, ReadOnly:=True)
+        Set wsSrc = wbSrc.Worksheets(1)   ' usually "Transaction Report"
+        
+        totalOut = GetTotalOut(wsSrc)
+        
+        If totalOut <> 0 Then
+            AddSettlementRow wsSet, acctPrefix, baseAcct, startDate, endDate, Abs(totalOut)
+        End If
+        
+        wbSrc.Close SaveChanges:=False
+        
+NextFile:
+        fileName = Dir()
+    Loop
+End Sub
+
+' ================================================================
+' Read 支出總計 from the Shopee report
+' ================================================================
+
+Private Function GetTotalOut(wsSrc As Worksheet) As Double
+    Dim rngFound As Range
+    Dim v As Variant
+    
+    On Error Resume Next
+    Set rngFound = wsSrc.Columns(1).Find(What:="支出總計", LookAt:=xlWhole, LookIn:=xlValues)
+    On Error GoTo 0
+    
+    If Not rngFound Is Nothing Then
+        v = wsSrc.Cells(rngFound.Row, 5).Value    ' column E
+        If IsNumeric(v) Then
+            GetTotalOut = CDbl(v)
+        Else
+            GetTotalOut = 0
+        End If
+    Else
+        GetTotalOut = 0
+    End If
+End Function
+
+' ================================================================
+' Append ONE new row (only A:D; J:O will be filled later)
+' ================================================================
+
+Private Sub AddSettlementRow(wsSet As Worksheet, _
+                             ByVal acctPrefix As String, _
+                             ByVal baseAcct As String, _
+                             ByVal startDate As Date, _
+                             ByVal endDate As Date, _
+                             ByVal revenue As Double)
+    Dim lastRow As Long
+    Dim newRow As Long
+    Dim newAcc As String
+    
+    ' Current last row
+    lastRow = wsSet.Cells(wsSet.Rows.Count, COL_ACCOUNT).End(xlUp).Row
+    newRow = lastRow + 1
+    
+    ' Copy formulas & formats from previous row into the new row
+    If lastRow >= 2 Then
+        wsSet.Rows(lastRow).Copy
+        wsSet.Rows(newRow).PasteSpecial xlPasteFormulas
+        wsSet.Rows(newRow).PasteSpecial xlPasteFormats
+        Application.CutCopyMode = False
+    End If
+    
+    ' Next account code for this group
+    newAcc = GetNextAccountCode(wsSet, acctPrefix, baseAcct)
+    
+    ' Fill core data
+    wsSet.Cells(newRow, COL_ACCOUNT).Value = newAcc
+    wsSet.Cells(newRow, COL_START).Value = startDate
+    wsSet.Cells(newRow, COL_END).Value = endDate
+    wsSet.Cells(newRow, COL_REVENUE).Value = revenue
+End Sub
+
+' ================================================================
+' "Drag-fill" J:O from the last old period down to new periods
+' ================================================================
+
+Private Sub DragFillPayments(ws As Worksheet, _
+                             ByVal lastOldRow As Long, _
+                             ByVal lastNewRow As Long)
+    Dim totalNewRows As Long
+    Dim numNewPeriods As Long
+    Dim srcStart As Long, srcEnd As Long
+    Dim destStart As Long, destEnd As Long
+    Dim i As Long
+    
+    totalNewRows = lastNewRow - lastOldRow
+    If totalNewRows <= 0 Then Exit Sub
+    
+    ' We need at least one complete old period (2 rows) to copy from
+    If lastOldRow < ROWS_PER_PERIOD + 1 Then Exit Sub
+    
+    ' How many new periods did we add? (each period = 2 rows)
+    numNewPeriods = totalNewRows \ ROWS_PER_PERIOD
+    If numNewPeriods < 1 Then Exit Sub
+    
+    ' Source block: the last *complete* old period (two rows)
+    srcStart = lastOldRow - ROWS_PER_PERIOD + 1
+    srcEnd = lastOldRow
+    
+    For i = 0 To numNewPeriods - 1
+        ' Destination block for each new period
+        destStart = lastOldRow + 1 + i * ROWS_PER_PERIOD
+        destEnd = destStart + ROWS_PER_PERIOD - 1
+        If destEnd > lastNewRow Then Exit For   ' safety
+        
+        ws.Range(ws.Cells(srcStart, COL_PAY_FIRST), ws.Cells(srcEnd, COL_PAY_LAST)).Copy _
+            Destination:=ws.Range(ws.Cells(destStart, COL_PAY_FIRST), ws.Cells(destEnd, COL_PAY_LAST))
+    Next i
+End Sub
+
+' ================================================================
+' Generate next account code like ck1808052 -> ck1808053 etc.
+' ================================================================
+
+Private Function GetNextAccountCode(wsSet As Worksheet, _
+                                    ByVal acctPrefix As String, _
+                                    ByVal baseAcct As String) As String
+    Dim lastRow As Long, r As Long
+    Dim accVal As String
+    Dim suffixStr As String
+    Dim numPart As Long
+    Dim maxNum As Long
+    
+    maxNum = -1
+    lastRow = wsSet.Cells(wsSet.Rows.Count, COL_ACCOUNT).End(xlUp).Row
+    
+    For r = 2 To lastRow
+        accVal = CStr(wsSet.Cells(r, COL_ACCOUNT).Value)
+        If Left$(accVal, Len(acctPrefix)) = acctPrefix Then
+            suffixStr = Mid$(accVal, Len(acctPrefix) + 1)
+            If suffixStr <> "" Then
+                If IsNumeric(suffixStr) And Len(suffixStr) <= 9 Then
+                    numPart = CLng(suffixStr)
+                    If numPart > maxNum Then maxNum = numPart
+                End If
+            End If
+        End If
+    Next r
+    
+    If maxNum < 0 Then
+        GetNextAccountCode = baseAcct
+    Else
+        GetNextAccountCode = acctPrefix & CStr(maxNum + 1)
+    End If
+End Function
+
+' ================================================================
+' Clear the last merged cell in column O (only the block for new rows)
+' ================================================================
+Private Sub ClearLastMergedO(ws As Worksheet, ByVal lastOldRow As Long, ByVal lastNewRow As Long)
+    Dim r As Long
+    Dim mergeArea As Range
+
+    ' Look from bottom up
+    For r = lastNewRow To lastOldRow + 1 Step -1
+        If ws.Cells(r, COL_PAY_LAST).MergeCells Then
+            Set mergeArea = ws.Cells(r, COL_PAY_LAST).mergeArea
+            mergeArea.ClearContents
+            Exit Sub
+        End If
+    Next r
+End Sub
+
+
