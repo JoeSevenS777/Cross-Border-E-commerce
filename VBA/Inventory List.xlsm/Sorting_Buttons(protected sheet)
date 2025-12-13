@@ -63,7 +63,7 @@ Sub SetupHeaderSortButtons()
             .OnAction = "SortByHeaderButton"
             .Line.Visible = msoFalse
             .Fill.ForeColor.RGB = RGB(230, 230, 230)
-            .AlternativeText = "ASC"   ' default next sort direction
+            .AlternativeText = "DESC"   ' default next sort direction
         End With
     Next c
 
