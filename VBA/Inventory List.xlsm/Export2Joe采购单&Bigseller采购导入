@@ -42,8 +42,10 @@ Public Sub Joe采购单_Bigseller采购导入()
     End If
 
     Set ws = ActiveSheet
-    If ws.Name <> "萌睫" And ws.Name <> "采菁" Then
-        MsgBox "此宏只适用于工作表【萌睫】和【采菁】。", vbInformation
+
+    ' ?? Allow Flortte
+    If ws.Name <> "萌睫" And ws.Name <> "采菁" And ws.Name <> "Flortte" Then
+        MsgBox "此宏只适用于工作表【萌睫】【采菁】【Flortte】。", vbInformation
         Exit Sub
     End If
 
@@ -57,11 +59,15 @@ Public Sub Joe采购单_Bigseller采购导入()
 
     On Error GoTo CleanExit
 
-    If ws.Name = "萌睫" Then
-        Handle_MengJie ws
-    ElseIf ws.Name = "采菁" Then
-        Handle_CaiJing ws
-    End If
+    ' ?? Dispatch logic
+    Select Case ws.Name
+        Case "萌睫"
+            Handle_MengJie ws
+        Case "采菁"
+            Handle_CaiJing ws
+        Case "Flortte"
+            Handle_Flortte ws
+    End Select
 
 CleanExit:
     Application.ScreenUpdating = scrn
@@ -71,21 +77,17 @@ CleanExit:
     If Err.Number <> 0 Then
         MsgBox "出错：" & Err.Number & " - " & Err.Description, vbCritical
     Else
-        ' 只有在导出成功时才询问是否打开文件
         resp = MsgBox("文件已全部生成。是否现在打开 Joe77采购单 和 Bigseller采购导入 文件？", _
                       vbYesNo + vbQuestion, "完成")
         If resp = vbYes Then
             On Error Resume Next
-            If Len(gJoePath) > 0 And Dir(gJoePath) <> "" Then
-                Workbooks.Open gJoePath
-            End If
-            If Len(gImpPath) > 0 And Dir(gImpPath) <> "" Then
-                Workbooks.Open gImpPath
-            End If
+            If Len(gJoePath) > 0 And Dir(gJoePath) <> "" Then Workbooks.Open gJoePath
+            If Len(gImpPath) > 0 And Dir(gImpPath) <> "" Then Workbooks.Open gImpPath
             On Error GoTo 0
         End If
     End If
 End Sub
+
 
 ' ==========================================================
 ' Helper: count how many rows have action = "place order"
@@ -240,7 +242,127 @@ Private Sub Export_Mengjie_Joe77(ByVal wsSrc As Worksheet, ByVal filePath As Str
 End Sub
 
 ' ==========================================================
+' Flortte 逻辑（文件均保存到本 xlsm 同目录）
+'   - Joe77采购单_Flortteyyyymmdd.xlsx
+'   - Bigseller采购导入_Flortteyyyymmdd.xlsx
+'
+' Joe77采购单：仅保留两列【SKU】【数量】
+' 且导出时会删除 SKU 前缀：MJ-Flortte-（不区分大小写）
+' ==========================================================
+Private Sub Handle_Flortte(ByVal ws As Worksheet)
+    Dim basePath As String, datePart As String
+    Dim joePrefix As String, impPrefix As String
+    Dim joeNameToday As String, impNameToday As String
+    Dim joePath As String, impPath As String
+    Dim cnt As Long
+
+    cnt = CountPlaceOrder(ws)
+    If cnt = 0 Then
+        MsgBox "【Flortte】中没有 ""place order"" 行，未生成任何文件。", vbInformation
+        Exit Sub
+    End If
+
+    basePath = ThisWorkbook.Path
+    datePart = Format(Date, "yyyymmdd")
+
+    joePrefix = "Joe77采购单_Flortte"
+    impPrefix = "Bigseller采购导入_Flortte"
+
+    joeNameToday = joePrefix & datePart & ".xlsx"
+    impNameToday = impPrefix & datePart & ".xlsx"
+
+    EnsureTodayFile basePath, joePrefix, joeNameToday
+    EnsureTodayFile basePath, impPrefix, impNameToday
+
+    joePath = basePath & Application.PathSeparator & joeNameToday
+    impPath = basePath & Application.PathSeparator & impNameToday
+
+    gJoePath = joePath
+    gImpPath = impPath
+
+    Export_Flortte_Joe77 ws, joePath
+    Export_ImportFile ws, impPath
+End Sub
+
+' Flortte → Joe77采购单_Flortte（仅两列：SKU / 数量；并去掉前缀 MJ-Flortte-）
+Private Sub Export_Flortte_Joe77(ByVal wsSrc As Worksheet, ByVal filePath As String)
+    Dim wb As Workbook, ws As Worksheet
+    Dim actCol As Long, skuCol As Long, qtyCol As Long
+    Dim lastRow As Long, r As Long, dstRow As Long
+    Dim actVal As String
+    Dim oldAlerts As Boolean
+    Dim skuVal As String
+
+    actCol = FindHeaderCol(wsSrc, "action")
+    skuCol = FindHeaderCol(wsSrc, "SKU")
+    qtyCol = FindHeaderCol(wsSrc, "数量")
+
+    If actCol = 0 Or skuCol = 0 Or qtyCol = 0 Then
+        MsgBox "【Flortte】中未找到必要表头（action / SKU / 数量）。", vbCritical
+        Exit Sub
+    End If
+
+    If Dir(filePath) <> "" Then
+        Set wb = Workbooks.Open(filePath)
+        Set ws = wb.Worksheets(1)
+
+        lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+        If lastRow < 2 Then lastRow = 2
+        ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, 2)).ClearContents
+    Else
+        Set wb = Workbooks.Add(xlWBATWorksheet)
+        Set ws = wb.Worksheets(1)
+        ws.Cells(1, 1).Value = "SKU"
+        ws.Cells(1, 2).Value = "数量"
+    End If
+
+    ' 强制表头
+    ws.Cells(1, 1).Value = "SKU"
+    ws.Cells(1, 2).Value = "数量"
+
+    lastRow = wsSrc.Cells(wsSrc.Rows.Count, actCol).End(xlUp).Row
+    dstRow = 2
+
+    For r = 2 To lastRow
+        actVal = LCase$(Trim$(CStr(wsSrc.Cells(r, actCol).Value)))
+        If actVal = "place order" Then
+            skuVal = CStr(wsSrc.Cells(r, skuCol).Value)
+            skuVal = StripPrefixCI(skuVal, "MJ-Flortte-")
+            ws.Cells(dstRow, 1).Value = skuVal
+            ws.Cells(dstRow, 2).Value = wsSrc.Cells(r, qtyCol).Value
+            dstRow = dstRow + 1
+        End If
+    Next r
+
+    ws.Columns.AutoFit
+
+    oldAlerts = Application.DisplayAlerts
+    Application.DisplayAlerts = False
+    wb.SaveAs fileName:=filePath, FileFormat:=xlOpenXMLWorkbook
+    wb.Close SaveChanges:=False
+    Application.DisplayAlerts = oldAlerts
+End Sub
+
+' 删除字符串前缀（不区分大小写）。若不匹配则返回原值。
+Private Function StripPrefixCI(ByVal s As String, ByVal prefix As String) As String
+    If Len(prefix) = 0 Then
+        StripPrefixCI = s
+        Exit Function
+    End If
+
+    If Len(s) >= Len(prefix) Then
+        If StrComp(Left$(s, Len(prefix)), prefix, vbTextCompare) = 0 Then
+            StripPrefixCI = Mid$(s, Len(prefix) + 1)
+            Exit Function
+        End If
+    End If
+
+    StripPrefixCI = s
+End Function
+
+' ==========================================================
 ' 共用：导出到 Bigseller采购导入_xxxyyyymmdd.xlsx
+
 '   - 保存并关闭（不保持打开）
 ' ==========================================================
 Private Sub Export_ImportFile(ByVal wsSrc As Worksheet, ByVal filePath As String)
@@ -454,5 +576,6 @@ Private Function FindHeaderCol(ByVal ws As Worksheet, ByVal headerText As String
         End If
     Next c
 End Function
+
 
 
