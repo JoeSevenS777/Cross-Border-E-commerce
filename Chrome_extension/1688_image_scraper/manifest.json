@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "1688 Image Scraper (Main/SKU/Details)",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Create product folder with main/sku/details and download 1688 product images >= min size. Extracts details via detailUrl/iframes.",
   "action": {
     "default_popup": "popup.html",
