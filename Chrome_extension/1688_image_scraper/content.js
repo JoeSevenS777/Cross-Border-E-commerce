@@ -107,6 +107,64 @@ function getProductName(){
   return best || '1688_product';
 }
 
+function sanitizeSkuLabel(s){
+  if (!s) return '';
+  s = String(s).replace(/\s+/g,' ').trim();
+  s = s.replace(/^(已选|选择|规格|颜色|尺寸|型号)[:：]?\s*/,'');
+  return s;
+}
+function collectSkuItemsFromDom(){
+  // Returns [{name, url}] best-effort. Many templates: sku options have text + img.
+  const items = [];
+  const roots = [
+    document.querySelector('[class*="sku-selection"]'),
+    document.querySelector('[class*="od-sku"]'),
+    document.querySelector('[class*="sku"]'),
+    document.querySelector('[id*="sku"]'),
+    document.querySelector('[class*="prop"]'),
+    document.querySelector('[class*="spec"]')
+  ].filter(Boolean);
+
+  const optionSelectors = ['[data-sku-id]','[data-skuvalue]','[data-value]','li','a','div'];
+  const seen = new Set();
+
+  function extractName(el){
+    const t1 = el.getAttribute('title') || el.getAttribute('aria-label') || '';
+    const txt = (t1 || el.textContent || '').replace(/\s+/g,' ').trim();
+    return sanitizeSkuLabel(txt);
+  }
+
+  function extractImg(el){
+    const img = el.querySelector?.('img');
+    if (!img) return null;
+    const attrs = ['data-original','data-src','data-url','data-img','src'];
+    for (const a of attrs){
+      const v = img.getAttribute(a) || '';
+      const u = normalizeUrl(v);
+      if (u) return u;
+    }
+    if (img.currentSrc) return normalizeUrl(img.currentSrc);
+    return null;
+  }
+
+  for (const r of roots){
+    for (const sel of optionSelectors){
+      const nodes = Array.from(r.querySelectorAll(sel));
+      for (const el of nodes){
+        const url = extractImg(el);
+        if (!url) continue;
+        const name = extractName(el);
+        const key = url + '||' + name;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        items.push({name, url});
+      }
+    }
+  }
+
+  return items;
+}
+
 function collectDomImgs(scope){
   const root = scope || document;
   const urls=[];
@@ -264,8 +322,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       const details = await collectDetailsImages();
 
+      // SKU items with names (best-effort)
+      const skuItems = collectSkuItemsFromDom();
+
       const videoUrl = findVideoUrlFromPage();
-      sendResponse({ok:true, productName, groups:{main, sku, details}, videoUrl});
+      sendResponse({ok:true, productName, groups:{main, sku, details}, skuItems, videoUrl});
     }catch(e){
       sendResponse({ok:false, error: String(e?.message||e)});
     }
