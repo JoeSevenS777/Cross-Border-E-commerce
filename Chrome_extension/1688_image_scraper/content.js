@@ -55,115 +55,67 @@ function extractImgUrlsFromText(text){
   return out.filter(Boolean);
 }
 
-function cleanProductTitle(s){
-  if (!s) return '';
-  s = String(s).replace(/\s+/g,' ').trim();
-  s = s.replace(/\s*-\s*阿里巴巴\s*$/,'').trim();
-  s = s.replace(/\s*-\s*1688\.com\s*$/i,'').trim();
-  return s;
-}
-function isLikelySupplierName(s){
-  if (!s) return false;
-  const t = String(s);
-  const kw = /(选品中心|供应商|厂家|工厂|公司|商行|店|旗舰店|专营店|官方|国际|中心|集团|企业|批发|市场|仓|仓库|店铺)/;
-  return kw.test(t) || t.length < 8;
-}
-function extractOfferTitleFromScripts(){
-  const scripts = Array.from(document.scripts || []);
-  const text = scripts.map(s => s.textContent || '').join('\n');
-  const patterns = [
-    /"offerTitle"\s*:\s*"([^"]{4,200})"/,
-    /"subject"\s*:\s*"([^"]{4,200})"/
-  ];
-  for (const p of patterns){
-    const m = text.match(p);
-    if (m && m[1]) return cleanProductTitle(m[1]);
+function decodeJsonString(s){
+  if (s == null) return '';
+  const raw = String(s);
+  // Many values in embedded JSON are already JSON-escaped.
+  try{
+    return JSON.parse('"' + raw.replace(/\\/g,'\\\\').replace(/"/g,'\\"') + '"');
+  }catch(_){
+    return raw
+      .replace(/\\u002F/g,'/')
+      .replace(/\\\//g,'/')
+      .replace(/&amp;/g,'&')
+      .trim();
   }
+}
+
+function extractFromScripts(pattern){
+  try{
+    const scripts = Array.from(document.scripts || []);
+    for (const s of scripts){
+      const txt = s?.textContent || '';
+      if (!txt || txt.length < 50) continue;
+      const m = txt.match(pattern);
+      if (m && m[1]) return decodeJsonString(m[1]);
+    }
+  }catch(_){}
   return '';
 }
+
 function getProductName(){
-  const candidates = [];
-  const embedded = extractOfferTitleFromScripts();
-  if (embedded) candidates.push(embedded);
+  // Prefer embedded data (offerTitle/subject) over generic DOM nodes,
+  // because on 1688 the first <h1> can be shop navigation.
+  const fromScripts =
+    extractFromScripts(/\"offerTitle\"\s*:\s*\"([^\"]+)\"/) ||
+    extractFromScripts(/\"subject\"\s*:\s*\"([^\"]+)\"/);
 
-  const og = document.querySelector('meta[property="og:title"]')?.getAttribute('content');
-  if (og) candidates.push(cleanProductTitle(og));
+  const fromDom =
+    document.querySelector('meta[property="og:title"]')?.getAttribute('content') ||
+    document.querySelector('meta[name="description"]')?.getAttribute('content') ||
+    document.querySelector('[data-spm-anchor-id*="title"] h1')?.textContent ||
+    document.querySelector('[class*="title"] h1')?.textContent ||
+    document.querySelector('h1[itemprop="name"]')?.textContent ||
+    document.title;
 
-  const h1 = document.querySelector('h1')?.innerText;
-  if (h1) candidates.push(cleanProductTitle(h1));
-
-  const titleEl = document.querySelector('[class*="title"] h1,[class*="od-title"],[data-role*="title"],[data-title]');
-  if (titleEl?.innerText) candidates.push(cleanProductTitle(titleEl.innerText));
-
-  const docTitle = cleanProductTitle(document.title);
-  if (docTitle) candidates.push(docTitle);
-
-  for (const c of candidates){
-    const t = (c||'').trim();
-    if (!t) continue;
-    if (t.length >= 10 && !isLikelySupplierName(t)) return t;
-  }
-  const best = candidates.filter(Boolean).sort((a,b)=>b.length-a.length)[0] || '1688_product';
-  return best || '1688_product';
+  const name = (fromScripts || fromDom || '1688_product').toString().trim();
+  // Strip common suffixes
+  return name.replace(/\s*-\s*阿里巴巴\s*$/,'').trim() || '1688_product';
 }
 
-function sanitizeSkuLabel(s){
-  if (!s) return '';
-  s = String(s).replace(/\s+/g,' ').trim();
-  s = s.replace(/^(已选|选择|规格|颜色|尺寸|型号)[:：]?\s*/,'');
-  return s;
+function getVideoUrl(){
+  // Try embedded JSON first
+  const v =
+    extractFromScripts(/\"videoUrl\"\s*:\s*\"([^\"]+)\"/) ||
+    extractFromScripts(/\"cloudVideo\"[\s\S]{0,200}?\"url\"\s*:\s*\"([^\"]+)\"/);
+
+  if (v && /^https?:\/\//i.test(v)) return v;
+
+  // Fallback DOM scan
+  const src = document.querySelector('video source')?.src || document.querySelector('video')?.src;
+  return (src && /^https?:\/\//i.test(src)) ? src : '';
 }
-function collectSkuItemsFromDom(){
-  // Returns [{name, url}] best-effort. Many templates: sku options have text + img.
-  const items = [];
-  const roots = [
-    document.querySelector('[class*="sku-selection"]'),
-    document.querySelector('[class*="od-sku"]'),
-    document.querySelector('[class*="sku"]'),
-    document.querySelector('[id*="sku"]'),
-    document.querySelector('[class*="prop"]'),
-    document.querySelector('[class*="spec"]')
-  ].filter(Boolean);
 
-  const optionSelectors = ['[data-sku-id]','[data-skuvalue]','[data-value]','li','a','div'];
-  const seen = new Set();
-
-  function extractName(el){
-    const t1 = el.getAttribute('title') || el.getAttribute('aria-label') || '';
-    const txt = (t1 || el.textContent || '').replace(/\s+/g,' ').trim();
-    return sanitizeSkuLabel(txt);
-  }
-
-  function extractImg(el){
-    const img = el.querySelector?.('img');
-    if (!img) return null;
-    const attrs = ['data-original','data-src','data-url','data-img','src'];
-    for (const a of attrs){
-      const v = img.getAttribute(a) || '';
-      const u = normalizeUrl(v);
-      if (u) return u;
-    }
-    if (img.currentSrc) return normalizeUrl(img.currentSrc);
-    return null;
-  }
-
-  for (const r of roots){
-    for (const sel of optionSelectors){
-      const nodes = Array.from(r.querySelectorAll(sel));
-      for (const el of nodes){
-        const url = extractImg(el);
-        if (!url) continue;
-        const name = extractName(el);
-        const key = url + '||' + name;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        items.push({name, url});
-      }
-    }
-  }
-
-  return items;
-}
 
 function collectDomImgs(scope){
   const root = scope || document;
@@ -187,6 +139,73 @@ function collectEmbeddedScriptText(){
   });
   return chunks.join('\n');
 }
+
+function extractJsonArrayFromBlob(blob, key){
+  // Extract JSON array literal following "<key>": [ ... ] with bracket counting.
+  const idx = blob.indexOf(`"${key}"`);
+  if (idx === -1) return null;
+  const colon = blob.indexOf(':', idx);
+  if (colon === -1) return null;
+  const lb = blob.indexOf('[', colon);
+  if (lb === -1) return null;
+
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = lb; i < blob.length; i++){
+    const ch = blob[i];
+    if (inStr){
+      if (esc) { esc = false; continue; }
+      if (ch === '\\') { esc = true; continue; }
+      if (ch === '"') { inStr = false; continue; }
+      continue;
+    } else {
+      if (ch === '"') { inStr = true; continue; }
+      if (ch === '[') depth++;
+      if (ch === ']') {
+        depth--;
+        if (depth === 0){
+          const raw = blob.slice(lb, i+1);
+          try{
+            const cleaned = raw
+              .replace(/\\u002F/g,'/')
+              .replace(/\\\//g,'/')
+              .replace(/\u002F/g,'/')
+              .replace(/\//g,'/');
+            return JSON.parse(cleaned);
+          }catch(e){
+            return null;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function collectSkuItemsFirstImageProp(){
+  // Return [{name,url}] from the FIRST skuProps dimension that actually provides imageUrl values.
+  const blob = collectEmbeddedScriptText();
+  const skuProps = extractJsonArrayFromBlob(blob, 'skuProps');
+  if (!Array.isArray(skuProps)) return [];
+  let chosen = null;
+  for (const prop of skuProps){
+    const values = prop && prop.value;
+    if (!Array.isArray(values) || values.length === 0) continue;
+    const hasImg = values.some(v => normalizeUrl(v && v.imageUrl));
+    if (hasImg) { chosen = values; break; }
+  }
+  if (!chosen) return [];
+  const items=[];
+  for (const v of chosen){
+    const name = sanitizeSkuLabel(v && v.name);
+    const url = normalizeUrl(v && v.imageUrl);
+    if (name && url) items.push({name, url});
+  }
+  return items;
+}
+
+
 
 function findDetailUrlFromScripts(){
   const blob = collectEmbeddedScriptText();
@@ -287,25 +306,6 @@ function splitMainSkuFromDom(){
   return {main: Array.from(mainSet), sku: Array.from(skuSet)};
 }
 
-function findVideoUrlFromPage(){
-  const v = document.querySelector('video');
-  if (v){
-    const s1 = v.currentSrc || v.src;
-    if (s1) return normalizeUrl(s1);
-    const s2 = v.querySelector('source')?.getAttribute('src');
-    if (s2) return normalizeUrl(s2);
-  }
-  const scripts = Array.from(document.scripts || []);
-  const blob = scripts.map(s => s.textContent || '').join('\n');
-  let m = blob.match(/"videoUrl"\s*:\s*"([^"]+)"/i);
-  if (m && m[1]) return normalizeUrl(m[1].replace(/\\u002F/g,'/').replace(/\\\//g,'/'));
-  m = blob.match(/"wirelessVideo"\s*:\s*\{[\s\S]*?"videoUrls"\s*:\s*\{[\s\S]*?"(ios|android)"\s*:\s*"([^"]+)"/i);
-  if (m && m[2]) return normalizeUrl(m[2].replace(/\\u002F/g,'/').replace(/\\\//g,'/'));
-  m = blob.match(/https?:\/\/[^"'\\\s<>]+?\.(?:mp4|m3u8|webm|mov)(?:\?[^"'\\\s<>]*)?/i);
-  if (m && m[0]) return normalizeUrl(m[0]);
-  return null;
-}
-
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try{
@@ -322,10 +322,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
       const details = await collectDetailsImages();
 
-      // SKU items with names (best-effort)
-      const skuItems = collectSkuItemsFromDom();
-
-      const videoUrl = findVideoUrlFromPage();
+      const skuItems = collectSkuItemsFirstImageProp();
+      const videoUrl = getVideoUrl();
       sendResponse({ok:true, productName, groups:{main, sku, details}, skuItems, videoUrl});
     }catch(e){
       sendResponse({ok:false, error: String(e?.message||e)});
@@ -333,3 +331,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   })();
   return true;
 });
+
+function sanitizeSkuLabel(text){
+  let s=String(text||'').replace(/\s+/g,' ').trim();
+  s=s.split(/¥|￥|库存/)[0];
+  s=s.replace(/^分类\s*\d+\s*/,'');
+  return s.trim();
+}

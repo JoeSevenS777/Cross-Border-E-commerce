@@ -1,11 +1,21 @@
 {
   "manifest_version": 3,
   "name": "1688 Image Scraper (Main/SKU/Details)",
-  "version": "1.0.2",
+  "version": "1.0.1",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "description": "Create product folder with main/sku/details and download 1688 product images >= min size. Extracts details via detailUrl/iframes.",
   "action": {
     "default_popup": "popup.html",
-    "default_title": "1688 Image Scraper"
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
   },
   "permissions": [
     "activeTab",
