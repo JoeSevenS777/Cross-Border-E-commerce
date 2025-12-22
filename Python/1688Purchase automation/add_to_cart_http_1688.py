@@ -632,22 +632,68 @@ def main(purchase_type: str = ""):
 
     fname = os.path.basename(plan_path)
 
-    # 安全确认
-    print("⚠ 安全确认：")
-    print(f"  即将根据以下工作簿向 1688 加购：『{fname}』")
-    print("  （本次只会处理这一份最新的 .xlsx 文件）")
-    print("按 Y 或 y 继续；按其他任意键取消。")
-    print("请按键确认:")
 
-    # ---- Loose confirmation: press Y/y (no Enter needed) ----
-    try:
-        key = msvcrt.getch().decode("utf-8", errors="ignore")
-    except Exception:
-        key = input().strip()[:1] or "n"
+    def _should_auto_confirm(path: str) -> bool:
+        """当脚本由流水线 .bat 触发时，允许对“刚刚导出的拣货表”自动跳过确认。
 
-    if key.lower() != "y":
-        print("未按 Y，本次操作已取消，未对购物车做任何修改。")
-        return
+        触发条件（满足其一即可）：
+        1) 环境变量 PIPELINE_START_EPOCH 存在，且文件 mtime >= PIPELINE_START_EPOCH
+        2) 环境变量 AUTO_CONFIRM_LATEST=1，并且文件“足够新”（默认 15 分钟内）
+
+        说明：
+        - 仅对本次将要处理的【最新】工作簿生效（plan_path 本身就是最新）。
+        - 仍然保留交互确认作为兜底，避免误加购历史文件。
+        """
+        try:
+            mtime = os.path.getmtime(path)
+        except Exception:
+            return False
+
+        now = time.time()
+        age_s = max(0, now - mtime)
+
+        # 1) pipeline start time
+        ts = os.environ.get("PIPELINE_START_EPOCH", "").strip()
+        if ts:
+            try:
+                start_ts = float(ts)
+                # 允许 2 秒钟误差（Windows 时间戳 / 写入延迟）
+                if mtime + 2 >= start_ts:
+                    return True
+            except Exception:
+                pass
+
+        # 2) explicit auto + freshness window
+        auto_flag = os.environ.get("AUTO_CONFIRM_LATEST", "").strip().lower() in ("1", "true", "yes", "y")
+        if auto_flag:
+            try:
+                win_s = float(os.environ.get("AUTO_CONFIRM_WINDOW_SEC", "900").strip() or "900")  # default 15 min
+            except Exception:
+                win_s = 900.0
+            if age_s <= win_s:
+                return True
+
+        return False
+
+    # 安全确认（流水线触发时，对“刚导出的最新文件”自动放行）
+    if _should_auto_confirm(plan_path):
+        print("[INFO] 检测到流水线触发，且当前最新工作簿为刚导出的文件 → 自动跳过确认。")
+    else:
+        print("⚠ 安全确认：")
+        print(f"  即将根据以下工作簿向 1688 加购：『{fname}』")
+        print("  （本次只会处理这一份最新的 .xlsx 文件）")
+        print("按 Y 或 y 继续；按其他任意键取消。")
+        print("请按键确认:")
+
+        # ---- Loose confirmation: press Y/y (no Enter needed) ----
+        try:
+            key = msvcrt.getch().decode("utf-8", errors="ignore")
+        except Exception:
+            key = input().strip()[:1] or "n"
+
+        if key.lower() != "y":
+            print("未按 Y，本次操作已取消，未对购物车做任何修改。")
+            return
 
     # 根据传入的 purchase_type 决定显示批发 / 代发
     if purchase_type == "consign_purchase_type":
