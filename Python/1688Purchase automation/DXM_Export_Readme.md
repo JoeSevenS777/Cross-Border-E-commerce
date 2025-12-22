@@ -86,6 +86,10 @@ The script searches for the newest `.xlsx` file under:
 
     Batch_added_to_cart/Locate&Audit_UnprocessedOrders_InDXM/
 
+**Post-processing cleanup (updated):**  
+After the Mode 2 workbook has been processed **successfully**, the script will **delete the workbook** from `Locate&Audit_UnprocessedOrders_InDXM/` to prevent accidental re-processing and to keep the folder clean. If processing fails (exception / HTTP error / file read error), the workbook is **not** deleted.
+
+
 If the folder is empty or missing, the script prints a friendly message and exits:
 
     [提示] 未检测到工作簿，请把订单工作簿放入文件夹后重新运行 Mode 2。
@@ -176,11 +180,17 @@ After summarization:
 
 ## Integration With Downstream Pipelines
 
-Often used together with mapping and 1688 add-to-cart automation.  
-Example `.bat` pipeline:
+Often used together with mapping and 1688 add-to-cart automation.
+
+Recommended pipeline runner:
+
+- `ADD ALL DXM to CART (AUTO).bat` — runs DXM → verifies a *new* picklist was exported → then runs `add_to_cart_http_1688.py` with auto-confirm enabled.
+
+If you prefer a pure Python chain:
 
     python dxm_export_and_audit.py 2
-    python add_to_cart_http_1688.py
+    python add_to_cart_http_1688.py wholesale
+
 
 ---
 
