@@ -10,6 +10,12 @@
   - Summarize newest date + total 提款金額
   - Rename file to: yyMMdd + core name + total amount
 
+Notes
+- This version FIXES 提款編號 parsing:
+  - OCR often reads the ID as a generic long number that may start with 21/22/etc (not only 20)
+  - OCR may insert spaces inside the number
+  - Prefer extracting from the line that contains the label “提款編號”
+
 This version includes improved amount parsing for:
 - slips where withdrawal amount is a negative value (-NT$xxxx or -xx,xxx)
 - ignores NT$0 (可提領金額)
@@ -60,11 +66,65 @@ def parse_date_from_text(text):
 
 
 def parse_withdraw_id_from_text(text):
-    """Find a long number starting with 20, 16–20 digits long."""
-    m = re.search(r"\b(20\d{15,20})\b", text)
-    if not m:
-        return None
-    return m.group(1)
+    """Extract 提款編號 (withdrawal ID) from OCR text.
+
+    Why this exists:
+    - Previous regex only matched IDs starting with 20...;
+      but real IDs can start with 21/22/etc (e.g. 212754562128284574).
+    - OCR may insert spaces inside the digits.
+
+    Strategy:
+    1) Prefer the label line: "提款編號" ... <digits>
+       Capture 16–22 digits allowing spaces.
+    2) Fallback: find any 16–22 digit number in the whole text (allow spaces),
+       exclude 8-digit dates.
+    """
+
+    # --- helper: detect 8-digit dates like 20260108 ---
+    def looks_like_date8(s: str) -> bool:
+        if len(s) != 8 or not s.isdigit():
+            return False
+        year = int(s[:4])
+        month = int(s[4:6])
+        day = int(s[6:8])
+        if not (2000 <= year <= 2099):
+            return False
+        if not (1 <= month <= 12 and 1 <= day <= 31):
+            return False
+        return True
+
+    # --- 1) Prefer: the line containing "提款編號" ---
+    # Allow spaces between digits because OCR sometimes does that.
+    # Example OCR could be:
+    #   提款編號 2127 5456 2128 2845 74
+    #   提款編號：212754562128284574
+    m = re.search(
+        r"提款編號\s*[:：]?\s*([0-9][0-9\s]{14,30})",
+        text,
+    )
+    if m:
+        raw = m.group(1)
+        digits = re.sub(r"\s+", "", raw)
+        if 16 <= len(digits) <= 22 and digits.isdigit() and not looks_like_date8(digits):
+            return digits
+
+    # --- 2) Fallback: any long digit chunk (allow spaces) ---
+    # We search for 16–22 digits, allowing internal spaces.
+    candidates = []
+    for mm in re.finditer(r"(?<!\d)(?:\d\s*){16,22}(?!\d)", text):
+        digits = re.sub(r"\s+", "", mm.group(0))
+        if not digits.isdigit():
+            continue
+        if looks_like_date8(digits):
+            continue
+        candidates.append(digits)
+
+    # If multiple candidates, take the longest (more likely to be the ID)
+    if candidates:
+        candidates.sort(key=len, reverse=True)
+        return candidates[0]
+
+    return None
 
 
 def parse_amount_from_text(text):
@@ -267,9 +327,11 @@ def process_workbook(filepath):
         v_date = ws.cell(row=row_index, column=col_date).value
         v_id = ws.cell(row=row_index, column=col_id).value
         v_amt = ws.cell(row=row_index, column=col_amount).value
-        if (v_date not in (None, "") and
-            v_id not in (None, "") and
-            v_amt not in (None, "")):
+        if (
+            v_date not in (None, "")
+            and v_id not in (None, "")
+            and v_amt not in (None, "")
+        ):
             continue
 
         pil_img = Image.open(img.ref)
@@ -311,7 +373,9 @@ def process_workbook(filepath):
     else:
         print(f"  Saved (name unchanged): {filename}")
 
-    print(f"  Filled rows: {filled_rows}, total amount: {total_amount}, newest date: {newest_date}")
+    print(
+        f"  Filled rows: {filled_rows}, total amount: {total_amount}, newest date: {newest_date}"
+    )
 
 
 # === ENTRY POINT: PROCESS ALL XLSX IN FOLDER ===
