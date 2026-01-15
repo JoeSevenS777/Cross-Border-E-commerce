@@ -43,7 +43,9 @@ Public Sub UpdateInventoryNEW()
     On Error GoTo ErrHandler
 
     Set wbInv = ThisWorkbook
-    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "Flortte")
+
+    ' Added: include sheet 【夹子】
+    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "Flortte", "夹子")
 
     ' -------- Speed up --------
     scrn = Application.ScreenUpdating
@@ -122,7 +124,7 @@ Public Sub UpdateInventoryNEW()
         End If
     Next r
 
-    ' -------- 4) Update both target sheets --------
+    ' -------- 4) Update target sheets --------
     For i = LBound(SHEETS_TO_UPDATE) To UBound(SHEETS_TO_UPDATE)
         Set wsInv = Nothing
         On Error Resume Next
@@ -261,11 +263,10 @@ Private Sub EnsureUpdateButton(ByVal ws As Worksheet, ByVal skuCol As Long)
     On Error GoTo 0
 
     ' Add a simple rectangle button
-Set shp = ws.Shapes.AddShape(msoShapeRoundedRectangle, _
-                            leftCell.Left + 2, leftCell.Top + 2, _
-                            Application.Min(60, leftCell.Width - 6), _
-                            Application.Min(20, leftCell.Height - 6))
-
+    Set shp = ws.Shapes.AddShape(msoShapeRoundedRectangle, _
+                                leftCell.Left + 2, leftCell.Top + 2, _
+                                Application.Min(60, leftCell.Width - 6), _
+                                Application.Min(20, leftCell.Height - 6))
 
     With shp
         .Name = btnName
