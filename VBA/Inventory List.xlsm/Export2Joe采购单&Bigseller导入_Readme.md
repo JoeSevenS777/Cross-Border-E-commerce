@@ -9,7 +9,8 @@ This VBA automation streamlines the workflow for generating **Joe77 采购单** 
 
 - 萌睫  
 - 采菁  
-- Flortte  
+- Flortte
+- 夹子
 
 Based on rows marked **"place order"**, the macro exports cleaned, standardized procurement files used for:
 
