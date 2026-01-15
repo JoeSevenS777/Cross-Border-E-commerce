@@ -75,6 +75,7 @@ Each run automatically updates **three** of the following sheets (if present):
 * `采菁`
 * `萌睫`
 * `Flortte`
+*  `夹子`
 
 No active-sheet dependency exists.
 
