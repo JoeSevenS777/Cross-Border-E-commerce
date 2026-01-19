@@ -1,0 +1,515 @@
+# -*- coding: utf-8 -*-
+"""
+1688 Order → Package Arrival Management Script
+
+Workflow implemented according to confirmed logic:
+
+- Each row represents ONE (订单编号, 运单号) relationship
+- No missing 订单编号 or 运单号
+- Supports:
+  1) Sync clean workbook from latest 1688 export
+  2) Paste arrival text to update 到达情况 / 备注
+
+Key rules:
+- Duplicate 订单编号 highlighted (one order, multiple packages)
+- Duplicate 运单号 highlighted (one package, multiple orders)
+- Column headers show unique totals: 订单编号（N）, 运单号（M）
+- Parsed export files are moved to ./parsed files/
+
+NOTE:
+- This script assumes all orders in export already have 运单号
+- 到达情况 / 备注 are preserved across syncs
+"""
+
+import os
+import shutil
+from collections import Counter, defaultdict
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import PatternFill
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PARSED_DIR = os.path.join(BASE_DIR, "parsed files")
+CLEAN_FILE = "Order_Package_arrival_Confirmation.xlsx"
+
+RED_FILL = PatternFill(start_color="FFB6C1", end_color="FFB6C1", fill_type="solid")
+
+REQUIRED_COLUMNS = [
+    "订单编号",
+    "卖家公司名",
+    "订单状态",
+    "订单创建时间",
+    "订单付款时间",
+    "物流公司",
+    "运单号",
+]
+
+# -------------------------------------------------------------------
+# Utility functions
+# -------------------------------------------------------------------
+
+def find_latest_export():
+    """Find the most recently modified 1688 export workbook in BASE_DIR.
+
+    Rules:
+    - Only look in BASE_DIR (not in ./parsed files)
+    - Ignore the clean workbook and Excel temp files (~$*)
+    - Choose the newest by modified time
+
+    Returns: filename (str)
+    Raises FileNotFoundError if none found.
+    """
+    candidates = []
+    for f in os.listdir(BASE_DIR):
+        if not f.lower().endswith(".xlsx"):
+            continue
+        if f == CLEAN_FILE:
+            continue
+        if f.startswith("~$"):
+            continue
+        full = os.path.join(BASE_DIR, f)
+        if os.path.isfile(full):
+            candidates.append((os.path.getmtime(full), f))
+
+    if not candidates:
+        raise FileNotFoundError(
+            "No new export workbook found in the base folder.\n"
+            "Action: Export the on-the-way list from 1688 and place the .xlsx file in the same folder as this script.\n"
+            "Note: Parsed exports are moved into ./parsed files/, and are not considered new exports."
+        )
+
+    # newest first
+    candidates.sort(reverse=True)
+    return candidates[0][1]
+
+
+def normalize_header(header):
+    """Normalize headers so columns can be found even after we add counts like 订单编号（26）."""
+    s = "" if header is None else str(header).strip()
+    if not s:
+        return s
+    # Convert full-width parentheses to half-width for easier parsing
+    s = s.replace("（", "(").replace("）", ")")
+    # If header contains a trailing count like "订单编号(26)", strip it
+    if "(" in s and s.endswith(")"):
+        base = s.split("(", 1)[0].strip()
+        inside = s[len(base):].strip()  # e.g. "(26)"
+        num = inside[1:-1] if inside.startswith("(") and inside.endswith(")") else ""
+        if num.isdigit() and base:
+            return base
+    return s
+
+
+# -------------------------------------------------------------------
+# Step 1: Parse messy 1688 export into (订单编号, 运单号) rows
+# -------------------------------------------------------------------
+
+def count_total_orders_in_export(filepath) -> int:
+    """Count total number of DISTINCT order IDs (订单编号) in the latest 1688 export."""
+    wb = load_workbook(filepath, data_only=True)
+    ws = wb.active
+
+    header_row = [normalize_header(c.value) for c in ws[1]]
+    try:
+        order_col_idx = header_row.index("订单编号")
+    except ValueError:
+        raise ValueError("Missing required column: 订单编号")
+
+    orders = set()
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        v = row[order_col_idx]
+        if v is None:
+            continue
+        s = str(v).strip()
+        if s:
+            orders.add(s)
+    return len(orders)
+
+
+def parse_export(filepath):
+    wb = load_workbook(filepath, data_only=True)
+    ws = wb.active
+
+    header_row = [normalize_header(c.value) for c in ws[1]]
+    col_index = {}
+    for idx, name in enumerate(header_row):
+        if name in REQUIRED_COLUMNS:
+            col_index[name] = idx
+
+    missing = set(REQUIRED_COLUMNS) - set(col_index)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    raw_rows = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        record = {k: row[col_index[k]] for k in REQUIRED_COLUMNS}
+        if record["订单编号"] and record["运单号"]:
+            raw_rows.append(record)
+
+    # group by (订单编号, 运单号)
+    grouped = defaultdict(list)
+    for r in raw_rows:
+        key = (str(r["订单编号"]), str(r["运单号"]))
+        grouped[key].append(r)
+
+    clean_rows = []
+    for (order_id, tracking), rows in grouped.items():
+        row_out = {
+            "订单编号": order_id,
+            "运单号": tracking,
+        }
+        # logistics company: most common
+        lc = Counter(r["物流公司"] for r in rows if r["物流公司"]).most_common(1)
+        row_out["物流公司"] = lc[0][0] if lc else ""
+
+        # order-level fields
+        for field in ["卖家公司名", "订单状态", "订单创建时间", "订单付款时间"]:
+            cnt = Counter(r[field] for r in rows if r[field]).most_common(1)
+            row_out[field] = cnt[0][0] if cnt else ""
+
+        clean_rows.append(row_out)
+
+    return clean_rows
+
+
+# -------------------------------------------------------------------
+# Step 2: Load existing clean workbook (if exists)
+# -------------------------------------------------------------------
+
+def load_existing():
+    if not os.path.exists(CLEAN_FILE):
+        return {}, []
+
+    wb = load_workbook(CLEAN_FILE)
+    ws = wb.active
+
+    headers = [normalize_header(c.value) for c in ws[1]]
+    idx = {h: i for i, h in enumerate(headers)}
+
+    preserved = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        order_id = str(row[idx["订单编号"]])
+        tracking = str(row[idx["运单号"]])
+        preserved[(order_id, tracking)] = {
+            "到达情况": row[idx.get("到达情况")],
+            "备注": row[idx.get("备注")],
+        }
+    return preserved, headers
+
+
+# -------------------------------------------------------------------
+# Step 3: Write clean workbook
+# -------------------------------------------------------------------
+
+def auto_adjust_column_width(ws):
+    """Auto-adjust column widths based on max content length."""
+    for col_cells in ws.columns:
+        max_len = 0
+        col_letter = col_cells[0].column_letter
+        for cell in col_cells:
+            try:
+                if cell.value is not None:
+                    max_len = max(max_len, len(str(cell.value)))
+            except Exception:
+                pass
+        # Add padding; cap to a reasonable max width
+        ws.column_dimensions[col_letter].width = min(max_len + 2, 60)
+
+
+# -------------------------------------------------------------------
+# Step 3: Write clean workbook
+# -------------------------------------------------------------------
+
+def write_clean(rows, preserved):
+    wb = Workbook()
+    ws = wb.active
+
+    headers = REQUIRED_COLUMNS + ["到达情况", "备注"]
+    ws.append(headers)
+
+    for r in rows:
+        key = (r["订单编号"], r["运单号"])
+        extra = preserved.get(key, {"到达情况": "", "备注": ""})
+        ws.append([
+            r.get("订单编号"),
+            r.get("卖家公司名"),
+            r.get("订单状态"),
+            r.get("订单创建时间"),
+            r.get("订单付款时间"),
+            r.get("物流公司"),
+            r.get("运单号"),
+            extra.get("到达情况"),
+            extra.get("备注"),
+        ])
+
+    # highlight duplicates
+    order_ids = [ws.cell(row=i, column=1).value for i in range(2, ws.max_row + 1)]
+    trackings = [ws.cell(row=i, column=7).value for i in range(2, ws.max_row + 1)]
+
+    order_cnt = Counter(order_ids)
+    track_cnt = Counter(trackings)
+
+    for i in range(2, ws.max_row + 1):
+        if order_cnt[ws.cell(row=i, column=1).value] > 1:
+            ws.cell(row=i, column=1).fill = RED_FILL
+        if track_cnt[ws.cell(row=i, column=7).value] > 1:
+            ws.cell(row=i, column=7).fill = RED_FILL
+
+    # update header counts (unique totals)
+    ws["A1"].value = f"订单编号（{len(order_cnt)}）"
+    ws["G1"].value = f"运单号（{len(track_cnt)}）"
+
+    # auto-adjust column widths
+    auto_adjust_column_width(ws)
+
+    try:
+        wb.save(CLEAN_FILE)
+    except PermissionError:
+        print(f"ERROR: '{CLEAN_FILE}' is currently open in Excel.")
+        print("Please close the workbook in Excel and run the script again.")
+        raise SystemExit(1)
+
+
+# -------------------------------------------------------------------
+# Step 4: Apply arrival text updates
+# -------------------------------------------------------------------
+
+def parse_arrival_blocks(text: str):
+    """Parse pasted arrival text into records.
+
+    Expected repeated blocks like:
+      【承运公司】圆通速递(YTO)
+      【运单号】YT7598163190233
+      恒志达齐
+
+    Notes may span multiple lines until the next 【承运公司】.
+    Returns: list of dicts {carrier, tracking, note}
+    """
+    if not text:
+        return []
+
+    # Normalize brackets and whitespace
+    t = text.replace("[", "【").replace("]", "】")
+    lines = [ln.strip() for ln in t.splitlines()]
+
+    records = []
+    carrier = ""
+    tracking = ""
+    note_lines = []
+
+    def flush():
+        nonlocal carrier, tracking, note_lines
+        if tracking:
+            records.append({
+                "carrier": carrier.strip(),
+                "tracking": tracking.strip(),
+                "note": "\n".join([x for x in note_lines if x.strip()]).strip(),
+            })
+        carrier = ""
+        tracking = ""
+        note_lines = []
+
+    for ln in lines:
+        if not ln:
+            continue
+        if "【承运公司】" in ln:
+            # New block starts
+            flush()
+            carrier = ln.split("【承运公司】", 1)[1].strip()
+            continue
+        if "【运单号】" in ln:
+            tracking = ln.split("【运单号】", 1)[1].strip()
+            continue
+        # Otherwise treat as note content
+        note_lines.append(ln)
+
+    flush()
+    # Deduplicate by tracking: if same tracking appears multiple times, merge notes
+    merged = {}
+    for r in records:
+        key = r["tracking"].replace(" ", "")
+        if key not in merged:
+            merged[key] = r
+        else:
+            # merge notes if new
+            n0 = merged[key].get("note", "")
+            n1 = r.get("note", "")
+            if n1 and n1 not in n0:
+                merged[key]["note"] = (n0 + ("\n" if n0 else "") + n1).strip()
+            # prefer carrier if missing
+            if not merged[key].get("carrier") and r.get("carrier"):
+                merged[key]["carrier"] = r["carrier"]
+    return list(merged.values())
+
+
+def infer_status(note: str) -> str:
+    """Infer 到达情况 from note. Conservative rules."""
+    note = (note or "").strip()
+    if not note:
+        return "已到达"
+    if "退款" in note:
+        return "退款"
+    if "退货" in note:
+        return "退货"
+    if "异常" in note or "丢" in note:
+        return "异常"
+    return "已到达"
+
+
+def apply_arrival_text(text: str):
+    """Update CLEAN_FILE based on pasted arrival text.
+
+    Match is by 运单号. If the same 运单号 maps to multiple orders, update ALL matching rows.
+    Returns: (updated_rows_count, unmatched_tracking_list)
+    """
+    records = parse_arrival_blocks(text)
+    if not records:
+        return 0, []
+
+    if not os.path.exists(CLEAN_FILE):
+        raise FileNotFoundError(f"{CLEAN_FILE} not found. Run sync mode first.")
+
+    wb = load_workbook(CLEAN_FILE)
+    ws = wb.active
+
+    headers = [normalize_header(c.value) for c in ws[1]]
+    idx = {h: i + 1 for i, h in enumerate(headers)}  # 1-based for openpyxl
+
+    required = ["运单号", "到达情况", "备注"]
+    missing = [h for h in required if h not in idx]
+    if missing:
+        raise ValueError(f"Clean workbook missing columns: {missing}")
+
+    # Optional columns
+    carrier_col = idx.get("物流公司")
+
+    # Build tracking -> row indices list
+    tracking_to_rows = defaultdict(list)
+    for r in range(2, ws.max_row + 1):
+        tval = ws.cell(row=r, column=idx["运单号"]).value
+        if tval is None:
+            continue
+        key = str(tval).strip().replace(" ", "")
+        if key:
+            tracking_to_rows[key].append(r)
+
+    updated = 0
+    unmatched = []
+
+    for rec in records:
+        tracking = rec["tracking"].strip().replace(" ", "")
+        carrier = (rec.get("carrier") or "").strip()
+        note = (rec.get("note") or "").strip()
+        status = infer_status(note)
+
+        rows = tracking_to_rows.get(tracking)
+        if not rows:
+            unmatched.append(tracking)
+            continue
+
+        for r in rows:
+            # 到达情况
+            ws.cell(row=r, column=idx["到达情况"]).value = status
+
+            # 备注: append if existing and different
+            note_cell = ws.cell(row=r, column=idx["备注"]).value
+            existing = "" if note_cell is None else str(note_cell).strip()
+            if note:
+                if not existing:
+                    ws.cell(row=r, column=idx["备注"]).value = note
+                elif note not in existing:
+                    ws.cell(row=r, column=idx["备注"]).value = (existing + " | " + note)
+
+            # 物流公司: only fill if empty
+            if carrier_col and carrier:
+                cval = ws.cell(row=r, column=carrier_col).value
+                if cval is None or str(cval).strip() == "":
+                    ws.cell(row=r, column=carrier_col).value = carrier
+
+            updated += 1
+
+    try:
+        wb.save(CLEAN_FILE)
+    except PermissionError:
+        print(f"ERROR: '{CLEAN_FILE}' is currently open in Excel.")
+        print("Please close the workbook in Excel and run the script again.")
+        raise SystemExit(1)
+    return updated, unmatched
+
+
+# -------------------------------------------------------------------
+# Step 5: Move parsed export
+# -------------------------------------------------------------------
+
+def archive_export(filename):
+    os.makedirs(PARSED_DIR, exist_ok=True)
+    shutil.move(os.path.join(BASE_DIR, filename),
+                os.path.join(PARSED_DIR, filename))
+
+
+# -------------------------------------------------------------------
+# Entry point
+# -------------------------------------------------------------------
+
+def main():
+    print("Choose mode:")
+    print("1 - Sync from latest 1688 export")
+    print("2 - Paste arrival info")
+    choice = input("Enter 1 or 2: ").strip()
+
+    if choice == "1":
+        try:
+            export = find_latest_export()
+        except FileNotFoundError as e:
+            print(str(e))
+            return
+
+        # Confirmation before syncing
+        try:
+            total_orders = count_total_orders_in_export(export)
+        except Exception as e:
+            print(f"Failed to count orders in export '{export}': {e}")
+            return
+
+        print(f"待收货订单总有 {total_orders} ，")
+        ans = input("确认请按Y/y同步，否则按其他任意键退出: ").strip().lower()
+        if ans != "y":
+            print("Cancelled. No changes made.")
+            return
+
+        rows = parse_export(export)
+        preserved, _ = load_existing()
+        write_clean(rows, preserved)
+        archive_export(export)
+        print("Sync completed.")
+
+    elif choice == "2":
+        print("Paste arrival text, then press Enter twice:")
+        # Stop after TWO consecutive blank lines to make paste-from-WeChat/etc. more forgiving.
+        lines = []
+        blank_streak = 0
+        while True:
+            try:
+                line = input()
+            except EOFError:
+                break
+            if line.strip() == "":
+                blank_streak += 1
+                if blank_streak >= 2:
+                    break
+                continue
+            blank_streak = 0
+            lines.append(line.rstrip("\n"))
+
+        updated, unmatched = apply_arrival_text("\n".join(lines))
+        print(f"Arrival update completed. Updated rows: {updated}. Unmatched 运单号: {len(unmatched)}")
+        if unmatched:
+            print("Unmatched 运单号:")
+            for t in unmatched:
+                print(f"  - {t}")
+
+    else:
+        print("Invalid choice.")
+
+
+if __name__ == "__main__":
+    main()
