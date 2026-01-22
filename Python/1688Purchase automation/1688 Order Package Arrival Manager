@@ -49,18 +49,17 @@ REQUIRED_COLUMNS = [
 # Utility functions
 # -------------------------------------------------------------------
 
-def find_latest_export():
-    """Find the most recently modified 1688 export workbook in BASE_DIR.
+def find_all_exports():
+    """Find ALL unparsed 1688 export workbooks in BASE_DIR.
 
     Rules:
     - Only look in BASE_DIR (not in ./parsed files)
     - Ignore the clean workbook and Excel temp files (~$*)
-    - Choose the newest by modified time
 
-    Returns: filename (str)
+    Returns: list of filenames (List[str])
     Raises FileNotFoundError if none found.
     """
-    candidates = []
+    exports = []
     for f in os.listdir(BASE_DIR):
         if not f.lower().endswith(".xlsx"):
             continue
@@ -70,18 +69,18 @@ def find_latest_export():
             continue
         full = os.path.join(BASE_DIR, f)
         if os.path.isfile(full):
-            candidates.append((os.path.getmtime(full), f))
+            exports.append(f)
 
-    if not candidates:
+    if not exports:
         raise FileNotFoundError(
-            "No new export workbook found in the base folder.\n"
-            "Action: Export the on-the-way list from 1688 and place the .xlsx file in the same folder as this script.\n"
+            "No new export workbook found in the base folder.
+"
+            "Action: Export the on-the-way list from 1688 and place the .xlsx file in the same folder as this script.
+"
             "Note: Parsed exports are moved into ./parsed files/, and are not considered new exports."
         )
 
-    # newest first
-    candidates.sort(reverse=True)
-    return candidates[0][1]
+    return exports
 
 
 def normalize_header(header):
@@ -139,30 +138,36 @@ def normalize_tracking(v) -> str:
 # Step 1: Parse messy 1688 export into (订单编号, 运单号) rows
 # -------------------------------------------------------------------
 
-def count_total_orders_in_export(filepath) -> int:
-    """Count total number of DISTINCT order IDs (订单编号) in the latest 1688 export."""
-    wb = load_workbook(filepath, data_only=True)
-    ws = wb.active
-
-    header_row = [normalize_header(c.value) for c in ws[1]]
-    try:
-        order_col_idx = header_row.index("订单编号")
-    except ValueError:
-        raise ValueError("Missing required column: 订单编号")
-
+def count_total_orders_in_exports(filepaths) -> int:
+    """Count total number of DISTINCT order IDs (订单编号) across ALL 1688 exports."""
     orders = set()
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        v = row[order_col_idx]
-        if v is None:
-            continue
-        s = str(v).strip()
-        if s:
-            orders.add(s)
+    for filepath in filepaths:
+        wb = load_workbook(resolve_path(filepath), data_only=True)
+        ws = wb.active
+
+        header_row = [normalize_header(c.value) for c in ws[1]]
+        try:
+            order_col_idx = header_row.index("订单编号")
+        except ValueError:
+            raise ValueError(f"Missing required column 订单编号 in export: {filepath}")
+
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            v = row[order_col_idx]
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                orders.add(s)
     return len(orders)
 
 
+def resolve_path(p: str) -> str:
+    return p if os.path.isabs(p) else os.path.join(BASE_DIR, p)
+
+
 def parse_export(filepath):
-    wb = load_workbook(filepath, data_only=True)
+    filepath = resolve_path(filepath)
+    wb = load_workbook(resolve_path(filepath), data_only=True)
     ws = wb.active
 
     header_row = [normalize_header(c.value) for c in ws[1]]
@@ -242,7 +247,7 @@ def load_existing():
             continue
 
         order_id = str(order_val).strip()
-        tracking = str(tracking_val).strip()
+        tracking = normalize_tracking(tracking_val)
         if not order_id or not tracking:
             continue
 
@@ -523,38 +528,33 @@ def open_clean_workbook():
 
 def main():
     print("Choose mode:")
-    print("1 - Sync from latest 1688 export")
+    print("1 - Sync from ALL new 1688 exports")
     print("2 - Paste arrival info")
     choice = input("Enter 1 or 2: ").strip()
 
     try:
         if choice == "1":
-            try:
-                export = find_latest_export()
-            except FileNotFoundError as e:
-                print(str(e))
-                return 1
-
-            # Confirmation before syncing
-            try:
-                total_orders = count_total_orders_in_export(export)
-            except Exception as e:
-                print(f"ERROR: Failed to count orders in export '{export}': {e}")
-                return 1
-
+            exports = find_all_exports()
+        
+            total_orders = count_total_orders_in_exports(exports)
+            print(f"发现 {len(exports)} 个1688导出文件")
             print(f"待收货订单总有 {total_orders} ，")
             ans = input("确认请按Y/y同步，否则按其他任意键退出: ").strip().lower()
             if ans != "y":
                 print("Cancelled. No changes made.")
                 return 0
-
-            rows = parse_export(export)
+        
+            all_rows = []
+            for export in exports:
+                all_rows.extend(parse_export(export))
+        
             preserved, _ = load_existing()
-            write_clean(rows, preserved)
-            archive_export(export)
+            write_clean(all_rows, preserved)
+        
+            for export in exports:
+                archive_export(export)
+        
             print("Sync completed successfully.")
-
-            # Auto-open workbook on success
             open_clean_workbook()
             return 0
 
@@ -576,7 +576,16 @@ def main():
                 blank_streak = 0
                 lines.append(line.rstrip("\n"))
 
-            updated, unmatched = apply_arrival_text("\n".join(lines))
+            text = "
+".join(lines)
+            parsed_packages = len(parse_arrival_blocks(text))
+            updated, unmatched = apply_arrival_text(text)
+
+            print("Arrival update summary:")
+            print(f"  Parsed packages: {parsed_packages}")
+            print(f"  Rows updated: {updated}")
+            print(f"  Unmatched 运单号: {len(unmatched)}")
+
             if unmatched:
                 print("Unmatched 运单号:")
                 for t in unmatched:
