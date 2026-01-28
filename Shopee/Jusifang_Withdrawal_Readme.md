@@ -1,243 +1,237 @@
-# Jusifang Withdrawal OCR Automation
-[![Python](https://img.shields.io/badge/Python-3.10+-blue)]()
-[![OCR](https://img.shields.io/badge/OCR-Tesseract-orange)]()
-[![Status](https://img.shields.io/badge/Status-Production-green)]()
+# Jusifang Withdrawal Automation
 
-Automated OCR workflow for extracting withdrawal records from Excel files containing screenshot-based transaction slips.  
-The script reads all `.xlsx` files in its folder, performs OCR on embedded images, identifies transaction metadata, fills missing cells, summarizes totals, and renames files according to a standardized naming format.
+![Python](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python&logoColor=white)
+![Platform](https://img.shields.io/badge/Platform-Windows-0078D6?logo=windows&logoColor=white)
+![Excel](https://img.shields.io/badge/Input-Excel%20(.xlsx)-217346?logo=microsoft-excel&logoColor=white)
+![OCR](https://img.shields.io/badge/OCR-Tesseract-success)
+![Encoding](https://img.shields.io/badge/Encoding-UTF--8-green)
+![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
-Designed specifically for **Jusifang (聚四方)** withdrawal slip formats.
-
----
-
-## Features
-
-- Processes **all .xlsx files** in the same directory as this script  
-- Reads embedded images from column `提款截圖`  
-- OCR via **Tesseract** with multilanguage support (`chi_tra + eng`)  
-- Extracts:
-  - 日期  
-  - 提款編號  
-  - 提款金額  
-- Only fills missing fields to avoid overwriting user-edited data  
-- Intelligent amount parsing with:
-  - Negative-value detection  
-  - Filtering out NT$0 “可提領金額”  
-  - Ignoring date-like numbers and long IDs  
-- Summarizes:
-  - Newest 日期 found in sheet  
-  - Total 提款金額  
-- Renames file to:
-  
-      yyMMdd + core name + total amount
-  
-  Example:
-  
-      251106個人卡提(馬京瑋)16642.xlsx
-  
-- Auto-removes original file after renaming (if permitted)
+> **Template → OCR Process → Archive → Revert Template**  
+> Designed for stable, repeatable withdrawal bookkeeping with screenshots embedded in Excel.
 
 ---
 
-## Directory Layout
+## Overview
 
-    folder/
-        Jusifang_Withdrawal_Automation.py
-        slip1.xlsx
-        slip2.xlsx
-        slip3.xlsx
-        ...
+This script automates the processing of **withdrawal screenshots embedded in Excel workbooks**.
 
-Running the script processes **every .xlsx file** in the folder (except temporary `~$` files).
+It will:
 
----
+1. Detect workbooks that contain **embedded screenshots** in column **`提款截圖`**
+2. Use **OCR** to extract:
+   - 日期
+   - 提款編號
+   - 提款金額
+3. Fill missing cells **without overwriting existing data**
+4. Generate a **dated, summed output workbook**
+5. Archive the finished workbook into a **per-person folder**
+6. Revert the working workbook back to its **original default template**
 
-## OCR Requirements
-
-- Tesseract OCR installed  
-- Correct path set:
-
-      pytesseract.pytesseract.tesseract_cmd = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
-
-- Recommended language packages:
-  - `chi_tra`
-  - `eng`
-
-Edit TESS_LANG if needed:
-
-      TESS_LANG = "chi_tra+eng"
+The workflow is safe, repeatable, and designed to minimize manual mistakes.
 
 ---
 
-## Extraction Logic
+## Folder Structure (Final)
 
-### 1. Date Detection
-Finds dates matching:
+```
+base_folder/
+│
+├─ Jusifang_Withdrawal_Automation.py
+├─ Jusifang_Withdrawal_Automation.bat
+│
+├─ 個人卡提(馬京瑋).xlsx        ← working template (you paste images here)
+├─ 個人卡提(白鎮瑋).xlsx        ← working template
+│
+├─ _template_sources/           ← auto-learned default templates (DO NOT edit)
+│   ├─ 個人卡提(馬京瑋).xlsx
+│   └─ 個人卡提(白鎮瑋).xlsx
+│
+├─ 個人卡提(馬京瑋)/            ← archived results
+│   └─ 260122個人卡提(馬京瑋)5051.xlsx
+│
+├─ 個人卡提(白鎮瑋)/
+│   └─ 260122個人卡提(白鎮瑋)120416.xlsx
+│
+└─ run_log/
+    ├─ run_20260128_155915.txt
+    └─ run_20260128_153459.txt
+```
 
-      YYYY/MM/DD
+---
+
+## Default Template Rules (Very Important)
+
+A workbook is considered a **default template** if:
+
+- It contains all required headers:
+  - `日期`
+  - `提款編號`
+  - `提款金額`
+  - `提款截圖`
+- **No images** are embedded in column `提款截圖`
+
+### What happens to templates
+
+- On startup, the script **auto-learns** each clean template
+- A copy is saved into `_template_sources/<核心檔名>.xlsx`
+- After processing, the working workbook is **reverted** by copying from its own template source
+
+This guarantees:
+
+- `馬京瑋` always reverts to **馬京瑋’s default data**
+- `白鎮瑋` always reverts to **白鎮瑋’s default data**
+- No cross-contamination of default values
+
+---
+
+## Processing Logic
+
+For each `.xlsx` in the base folder:
+
+### 1. Template Detection
+- If **no images** are found in `提款截圖` → skipped (treated as template)
+
+### 2. OCR Processing
+- Only rows with images in `提款截圖` are processed
+- Existing cell values are **never overwritten**
+- OCR extracts:
+  - 日期 (YYYY/MM/DD)
+  - 提款編號 (16–22 digits, OCR-robust)
+  - 提款金額 (negative values → stored as positive)
+
+### 3. Summary & Rename
+- `newest_date` = latest 日期 in sheet
+- `total_amount` = sum of 提款金額
+- Output filename:
+  ```
+  yyMMdd + 核心檔名 + total_amount.xlsx
+  ```
 
 Example:
+```
+260122個人卡提(馬京瑋)5051.xlsx
+```
 
-- 2025/11/06 → recognized  
-- Other formats ignored to avoid false positives
+### 4. Archive
+- The finished workbook is moved to:
+  ```
+  ./核心檔名/
+  ```
+
+### 5. Revert Template
+- The working file is deleted
+- A fresh template is copied back from:
+  ```
+  _template_sources/<核心檔名>.xlsx
+  ```
 
 ---
 
-### 2. Withdrawal ID Detection
-Finds long numeric IDs:
+## Safety & Error Handling
 
-- Starting with 20  
-- 16–20 digits long  
+The script prints clear `ERROR:` messages and **never overwrites silently**.
+
+Common protected cases:
+
+- Workbook is open in Excel
+- Required headers are missing
+- Finished workbook already exists
+- Template source is missing
+- Working file still contains images during revert
 
 Example:
-
-      202511061234567890 → valid withdrawal ID
-
----
-
-### 3. Amount Detection
-
-The script uses a multi-stage extraction:
-
-#### Priority 1 — Keyword-based
-Identifies lines containing:
-
-- 提領總額  
-- 提款金額  
-- 提領金額  
-
-And extracts negative amounts:
-
-      -NT$16642  
-      -16,642元
-
-#### Priority 2 — Fallback Scan
-Scans **all negative numbers** and filters out:
-
-- 8-digit dates (e.g., 20251204)  
-- Extremely long numbers → IDs  
-- Zero amounts  
-- Values > 2,000,000  
-
-From remaining candidates, selects the **largest absolute value** as the real withdrawal.
+```
+ERROR: Finished workbook already exists: 個人卡提(馬京瑋)/260122個人卡提(馬京瑋)5051.xlsx
+ERROR: To avoid overwriting, the script will stop for this file.
+```
 
 ---
 
-## File Renaming Logic
+## How to Run (Recommended)
 
-After processing, the script summarizes the sheet:
+### Use the `.bat` file (Windows)
 
-- newest_date  
-- total_amount  
+Double-click:
 
-Then constructs new filename:
+```
+Jusifang_Withdrawal_Automation.bat
+```
 
-      yyMMdd + core name + total amount + .xlsx
+The runner will:
 
-Where “core name” removes:
-
-- Leading date  
-- Trailing digits  
-- Extra whitespace / underscores
-
-Example:
-
-    Input filename: 251106個人卡提(馬京瑋)133819.xlsx  
-    Output filename: 251106個人卡提(馬京瑋)16642.xlsx
-
-If no valid summary is found, original filename is kept.
+- Force UTF-8 output
+- Create `run_log/` automatically
+- Capture **stdout + stderr** into a timestamped log
+- Keep the terminal open
+- Print the last 40 lines for quick checking
 
 ---
 
-## Workflow Diagram
+## Logs
 
-    For each XLSX file:
-        ↓
-    Load workbook
-        ↓
-    Identify header columns:
-        日期 / 提款編號 / 提款金額 / 提款截圖
-        ↓
-    For each embedded image:
-        ↓ OCR → text
-        ↓ Parse date / ID / amount
-        ↓ Fill only missing cells
-        ↓
-    Summarize newest date + total amount
-        ↓
-    Rename file accordingly
-        ↓
-    Delete original file (optional fallback protection)
+- All logs are stored in:
+  ```
+  run_log/
+  ```
+- Encoding: **UTF-8**
+- If terminal shows garbled characters:
+  - The log file itself is correct
+  - Open it with **VS Code** or **Windows 11 Notepad**
+  - Terminal display depends on font / code page
 
 ---
 
-## Example Usage
+## OCR Notes
 
-Simply place this script and your `.xlsx` files together:
-
-    C:\Users\You\Withdrawals\
-        Jusifang_Withdrawal_Automation.py
-        File1.xlsx
-        File2.xlsx
-
-Run:
-
-    python Jusifang_Withdrawal_Automation.py
-
----
-
-## Console Output Example
-
-    Found 3 .xlsx file(s)
-    === Processing: File1.xlsx ===
-      Row 3: date=2025-11-06, id=2025110612345678, amount=16642
-      Row 5: date=2025-11-06, id=2025110612345680, amount=9420
-      Saved as: 251106個人卡提(馬京瑋)26062.xlsx
-      Filled rows: 2, total amount: 26062, newest date: 2025-11-06
+- Uses **Tesseract OCR**
+- Default language:
+  ```
+  chi_tra + eng
+  ```
+- Tesseract path (edit if needed):
+  ```
+  C:\Program Files\Tesseract-OCR\tesseract.exe
+  ```
 
 ---
 
-## Error Handling
+## Recommended Workflow (Daily Use)
 
-| Issue | Behavior |
-|-------|----------|
-| Missing columns | File skipped |
-| OCR failure | Blank fields preserved |
-| Invalid number formats | Ignored safely |
-| Rename conflict | Original preserved or deletion skipped |
-
-The script prioritizes **data safety**, only filling empty cells.
+1. Open `個人卡提(XXX).xlsx`
+2. Paste withdrawal screenshots into column `提款截圖`
+3. Save & close Excel
+4. Double-click the `.bat`
+5. Verify the archived file
+6. Continue using the reverted clean template
 
 ---
 
-## When to Use This Script
+## Design Philosophy
 
-- Monthly Jusifang withdrawal reports  
-- OCR processing for banking screenshots  
-- Automating manual data entry  
-- Cleaning large backlogs of slips  
-- Standardizing filenames for bookkeeping
+- **Template integrity first**
+- **No silent overwrites**
+- **Per-person isolation**
+- **Logs over dialogs**
+- **One-click repeatability**
 
----
-
-## Requirements
-
-- Python 3.10+  
-- Dependencies:
-  - pytesseract  
-  - pillow  
-  - openpyxl  
-
-Install:
-
-    pip install pytesseract pillow openpyxl
-
-Ensure Tesseract OCR is installed separately.
+This script is intentionally conservative to protect financial records.
 
 ---
 
-## License
+## Troubleshooting Checklist
 
-Internal-use automation tool.  
-For personal bookkeeping and workflow optimization.
+If something looks wrong:
 
+- Is Excel fully closed?
+- Does the workbook still contain images?
+- Did a finished file already exist?
+- Check `run_log/*.txt`
+
+If needed, delete a wrong template source in `_template_sources/` and rerun once with a clean template to re-learn it.
+
+---
+
+## End
+
+If you want enhancements later (versioned outputs, CSV export, summary report, auto-zip archives), they can be layered cleanly on top of this foundation.
