@@ -1,0 +1,182 @@
+Option Explicit
+
+Private Function LabelText_Shelf() As String
+    LabelText_Shelf = ChrW(&H8CA8) & ChrW(&H67B6) & ChrW(&H4F4D) & ":"
+End Function
+
+Private Function LabelText_SKU() As String
+    LabelText_SKU = "SKU:"
+End Function
+
+Private Function LabelText_GTIN() As String
+    LabelText_GTIN = "GTIN:"
+End Function
+
+Private Function LabelText_Qty() As String
+    LabelText_Qty = ChrW(&H6578) & ChrW(&H91CF) & ":"
+End Function
+
+Private Sub ApplyCJKFont(ByVal ws As Worksheet)
+    On Error Resume Next
+    ws.Cells.Font.Name = "Microsoft JhengHei"
+    If Err.Number <> 0 Then
+        Err.Clear
+        ws.Cells.Font.Name = "Microsoft YaHei UI"
+    End If
+    If Err.Number <> 0 Then
+        Err.Clear
+        ws.Cells.Font.Name = "PMingLiU"
+    End If
+    If Err.Number <> 0 Then
+        Err.Clear
+        ws.Cells.Font.Name = "SimSun"
+    End If
+    On Error GoTo 0
+End Sub
+
+Private Function IsDataRowSelected(ByVal rowNum As Long, ByVal selectedRows As Collection) As Boolean
+    On Error Resume Next
+    Dim tmp As Variant
+    tmp = selectedRows(CStr(rowNum))
+    IsDataRowSelected = (Err.Number = 0)
+    Err.Clear
+    On Error GoTo 0
+End Function
+
+Public Sub PrintSelectedLabelsPreview()
+
+    Dim wb As Workbook
+    Dim wsData As Worksheet
+    Dim wsLabel As Worksheet
+    Dim selectedRows As Collection
+    Dim area As Range
+    Dim cell As Range
+    Dim rowNum As Long
+    Dim i As Long
+    Dim pageCount As Long
+    Dim topRow As Long
+    Dim bottomRow As Long
+    Dim pageBreakRow As Long
+    Dim lastDataRow As Long
+
+    Set wb = ThisWorkbook
+    Set wsData = wb.Worksheets("Sheet2")
+    Set wsLabel = wb.Worksheets("PrintPreview")
+
+    If ActiveSheet.Name <> wsData.Name Then
+        MsgBox "Please go to Sheet2, select the SKU cells or rows you want, and run the macro again.", vbExclamation
+        Exit Sub
+    End If
+
+    If TypeName(Selection) <> "Range" Then
+        MsgBox "Please select the SKU cells or rows you want to preview.", vbExclamation
+        Exit Sub
+    End If
+
+    Set selectedRows = New Collection
+    lastDataRow = wsData.Cells(wsData.Rows.Count, "A").End(xlUp).Row
+
+    On Error Resume Next
+
+    ' If the user selects the whole SKU column or many cells in column A,
+    ' only keep non-empty data rows and exclude the header row.
+    For Each area In Selection.Areas
+        For Each cell In area.Cells
+            rowNum = cell.Row
+
+            If rowNum >= 2 And rowNum <= lastDataRow Then
+                If Len(Trim(wsData.Cells(rowNum, "A").Value)) > 0 Then
+                    selectedRows.Add rowNum, CStr(rowNum)
+                End If
+            End If
+        Next cell
+    Next area
+
+    On Error GoTo 0
+
+    If selectedRows.Count = 0 Then
+        MsgBox "No valid SKU rows were found in your selection.", vbExclamation
+        Exit Sub
+    End If
+
+    Application.ScreenUpdating = False
+
+    wsLabel.Cells.Clear
+    wsLabel.ResetAllPageBreaks
+
+    With wsLabel.PageSetup
+        .Zoom = False
+        .FitToPagesWide = 1
+        .FitToPagesTall = False
+        .Orientation = xlPortrait
+        .CenterHorizontally = True
+        .CenterVertically = True
+        .LeftMargin = Application.CentimetersToPoints(0.5)
+        .RightMargin = Application.CentimetersToPoints(0.5)
+        .TopMargin = Application.CentimetersToPoints(0.5)
+        .BottomMargin = Application.CentimetersToPoints(0.5)
+        .HeaderMargin = 0
+        .FooterMargin = 0
+    End With
+
+    ' Make the left title column narrower because 货架位 is shorter than 台湾货架位.
+    wsLabel.Columns("A").ColumnWidth = 10
+    wsLabel.Columns("B").ColumnWidth = 32
+
+    pageCount = selectedRows.Count
+
+    For i = 1 To pageCount
+
+        topRow = (i - 1) * 8 + 1
+        bottomRow = topRow + 3
+
+        wsLabel.Range("A" & topRow).Value = LabelText_Shelf()
+        wsLabel.Range("A" & topRow + 1).Value = LabelText_SKU()
+        wsLabel.Range("A" & topRow + 2).Value = LabelText_GTIN()
+        wsLabel.Range("A" & topRow + 3).Value = LabelText_Qty()
+
+        wsLabel.Range("B" & topRow).Value = wsData.Cells(selectedRows(i), "C").Value   ' 台湾货架位
+        wsLabel.Range("B" & topRow + 1).Value = wsData.Cells(selectedRows(i), "A").Value ' SKU
+        wsLabel.Range("B" & topRow + 2).Value = wsData.Cells(selectedRows(i), "G").Value ' GTIN
+        wsLabel.Range("B" & topRow + 3).Value = wsData.Cells(selectedRows(i), "F").Value ' 数量
+
+        With wsLabel.Range("A" & topRow & ":B" & bottomRow)
+            .Borders.LineStyle = xlContinuous
+            .Borders.Weight = xlThin
+            .VerticalAlignment = xlCenter
+            .HorizontalAlignment = xlLeft
+            .WrapText = True
+        End With
+
+        wsLabel.Rows(topRow).RowHeight = 36
+        wsLabel.Rows(topRow + 1).RowHeight = 52
+        wsLabel.Rows(topRow + 2).RowHeight = 36
+        wsLabel.Rows(topRow + 3).RowHeight = 36
+
+        With wsLabel.Range("A" & topRow & ":A" & bottomRow)
+            .Font.Bold = True
+            .Font.Size = 16
+        End With
+
+        With wsLabel.Range("B" & topRow & ":B" & bottomRow)
+            .Font.Size = 16
+        End With
+
+        wsLabel.Range("B" & topRow + 1).Font.Size = 14
+
+        If i < pageCount Then
+            pageBreakRow = topRow + 8
+            wsLabel.HPageBreaks.Add Before:=wsLabel.Rows(pageBreakRow)
+        End If
+    Next i
+
+    ApplyCJKFont wsLabel
+
+    wsLabel.PageSetup.PrintArea = wsLabel.Range("A1:B" & ((pageCount - 1) * 8 + 4)).Address
+
+    Application.ScreenUpdating = True
+
+    wsLabel.PrintPreview
+
+End Sub
+
