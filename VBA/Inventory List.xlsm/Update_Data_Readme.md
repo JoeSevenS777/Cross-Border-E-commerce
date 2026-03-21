@@ -141,7 +141,7 @@ The most recently modified file is chosen automatically.
 
 ## 🚀 How to Use
 
-1. Open **Inventory List - 副本.xlsm**
+1. Open **Inventory List.xlsm**
 2. Click the **Update** button next to the SKU header (or run `UpdateInventoryNEW` manually)
 3. Both `采菁` and `萌睫` sheets are updated automatically
 4. No confirmation popup appears unless something goes wrong
