@@ -45,7 +45,7 @@ Public Sub UpdateInventoryNEW()
     Set wbInv = ThisWorkbook
 
     ' Added: include sheet 【夹子】
-    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "Flortte", "夹子")
+    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "魔仙", "Flortte", "夹子")
 
     ' -------- Speed up --------
     scrn = Application.ScreenUpdating
