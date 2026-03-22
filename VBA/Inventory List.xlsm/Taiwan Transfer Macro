@@ -1,0 +1,625 @@
+Option Explicit
+
+' Taiwan Transfer Macro
+' Place this code in a standard module inside Inventory List.xlsm
+
+Private Const BIGSELLER_PREFIX As String = "Bigseller调拨导入"
+Private Const BIGSELLER_EXT As String = ".xlsx"
+Private Const TAIWAN_PREFIX As String = "台湾仓库调拨表"
+Private Const TAIWAN_EXT As String = ".xlsm"
+Private Const ONEDRIVE_FOLDER As String = "C:\Users\zouzh\OneDrive\"
+Private Const TAIWAN_LOG_FOLDER As String = "D:\JoeProgramFiles\inventory\Taiwan transfer logs\"
+
+Private Type TransferRow
+    SKU As String
+    GTIN As String
+    DailySales As Variant
+    TotalStock As Variant
+    QtyRaw As Variant
+    QtyForBigseller As Variant
+    Shelf As String
+End Type
+
+Private gLastStep As String
+
+Public Sub CreateTaiwanTransferDocuments()
+    10      Dim sourceSheetNames As Variant
+    20      Dim transfers() As TransferRow
+    30      Dim transferCount As Long
+    40      Dim todayStamp As String
+    50      Dim baseFolder As String
+    60      Dim bigsellerTemplatePath As String
+    70      Dim bigsellerOutputPath As String
+    80      Dim taiwanCurrentPath As String
+    90      Dim taiwanRenamedPath As String
+    100     Dim taiwanLogCopyPath As String
+    110     Dim successMessage As String
+    120     Dim answer As VbMsgBoxResult
+    130     Dim errText As String
+    
+    140     On Error GoTo CleanFail
+    150     TraceStep "Start macro"
+    160     Application.ScreenUpdating = False
+    170     Application.EnableEvents = False
+    180     Application.DisplayAlerts = False
+    190     Application.StatusBar = "Preparing Taiwan transfer files..."
+    
+    200     sourceSheetNames = Array("采菁", "萌睫", "Flortte", "魔仙", "夹子", "其他备货")
+    210     todayStamp = Format(Date, "yyyymmdd")
+    220     baseFolder = IncludeTrailingSlash(ThisWorkbook.Path)
+    230     TraceStep "Workbook path resolved: " & baseFolder
+    
+    240     If Len(baseFolder) = 0 Then
+    250         Err.Raise vbObjectError + 1000, , "Cannot determine the folder of """ & ThisWorkbook.Name & """."
+    260     End If
+    
+    270     ValidateFolderExists baseFolder, "Base folder of """ & ThisWorkbook.Name & """"
+    280     ValidateFolderExists ONEDRIVE_FOLDER, "OneDrive folder"
+    290     ValidateFolderExists TAIWAN_LOG_FOLDER, "Taiwan transfer logs folder"
+    300     TraceStep "Folders validated"
+    
+    310     transferCount = CollectTransferRows(ThisWorkbook, sourceSheetNames, transfers)
+    320     TraceStep "Transfer rows collected: " & CStr(transferCount)
+    330     If transferCount = 0 Then
+    340         MsgBox "no transfer found", vbInformation
+    350         GoTo CleanExit
+    360     End If
+    
+    370     bigsellerTemplatePath = GetLatestDatedFile(baseFolder, BIGSELLER_PREFIX, BIGSELLER_EXT)
+    380     TraceStep "Bigseller template path: " & bigsellerTemplatePath
+    390     If Len(bigsellerTemplatePath) = 0 Then
+    400         Err.Raise vbObjectError + 1001, , "No file matching """ & BIGSELLER_PREFIX & """ was found in: " & baseFolder
+    410     End If
+    
+    420     taiwanCurrentPath = GetLatestDatedFile(IncludeTrailingSlash(ONEDRIVE_FOLDER), TAIWAN_PREFIX, TAIWAN_EXT)
+    430     TraceStep "Current Taiwan OneDrive file: " & taiwanCurrentPath
+    440     If Len(taiwanCurrentPath) = 0 Then
+    450         Err.Raise vbObjectError + 1002, , "No file matching """ & TAIWAN_PREFIX & """ was found in: " & IncludeTrailingSlash(ONEDRIVE_FOLDER)
+    460     End If
+    470     taiwanRenamedPath = BuildTaiwanTimestampPath(IncludeTrailingSlash(ONEDRIVE_FOLDER))
+    480     TraceStep "Target Taiwan OneDrive renamed path: " & taiwanRenamedPath
+    
+    490     bigsellerOutputPath = baseFolder & BIGSELLER_PREFIX & todayStamp & BIGSELLER_EXT
+    500     taiwanLogCopyPath = GetAvailableFilePath(IncludeTrailingSlash(TAIWAN_LOG_FOLDER) & GetFileNameOnly(taiwanCurrentPath))
+    510     TraceStep "Bigseller output path: " & bigsellerOutputPath
+    520     TraceStep "Taiwan log copy path: " & taiwanLogCopyPath
+    
+    530     TraceStep "Removing existing same-date Bigseller output"
+    540     RecycleIfExists bigsellerOutputPath
+    
+    550     TraceStep "Copying Bigseller template"
+    560     If Dir$(bigsellerTemplatePath, vbNormal) = vbNullString Then
+    570         Err.Raise vbObjectError + 2001, , "Bigseller template NOT FOUND at: " & bigsellerTemplatePath
+    580     End If
+    590     TraceStep "Template exists, start FileCopy"
+    600     FileCopy bigsellerTemplatePath, bigsellerOutputPath
+    610     TraceStep "FileCopy success"
+    620     TraceStep "Building Bigseller file"
+    630     BuildBigsellerFile bigsellerOutputPath, transfers, transferCount
+    640     TraceStep "Cleaning old Bigseller files"
+    650     RecycleAllMatchingDatedFiles baseFolder, BIGSELLER_PREFIX, BIGSELLER_EXT, bigsellerOutputPath
+    
+    660     TraceStep "Copying current Taiwan file to local logs"
+    670     FileCopy taiwanCurrentPath, taiwanLogCopyPath
+    680     TraceStep "Updating current Taiwan OneDrive file in place"
+    690     BuildTaiwanTransferFile taiwanCurrentPath, transfers, transferCount
+    700     TraceStep "Renaming Taiwan OneDrive file"
+    710     taiwanRenamedPath = RenameTaiwanFileWithTimestamp(taiwanCurrentPath)
+    
+    720     successMessage = "Taiwan transfer documents created successfully." & vbCrLf & vbCrLf & _
+                         "Bigseller file:" & vbCrLf & GetFileNameOnly(bigsellerOutputPath) & vbCrLf & vbCrLf & _
+                         "Taiwan OneDrive file renamed to:" & vbCrLf & GetFileNameOnly(taiwanRenamedPath) & vbCrLf & vbCrLf & _
+                         "Taiwan log copy created:" & vbCrLf & GetFileNameOnly(taiwanLogCopyPath) & vbCrLf & vbCrLf & _
+                         "Open both files now?"
+    730     TraceStep "Preparing success prompt"
+    
+    740     answer = MsgBox(successMessage, vbQuestion + vbYesNo, "Taiwan Transfer Completed")
+    750     If answer = vbYes Then
+    760         TraceStep "Opening Bigseller output file"
+    770         OpenFileInExcel bigsellerOutputPath, "Bigseller output file"
+    780         TraceStep "Opening Taiwan transfer file"
+    790         OpenFileInExcel taiwanRenamedPath, "Taiwan transfer file"
+    800     End If
+    
+CleanExit:
+    810     TraceStep "Macro finished"
+    820     Application.StatusBar = False
+    830     Application.ScreenUpdating = True
+    840     Application.EnableEvents = True
+    850     Application.DisplayAlerts = True
+    860     Exit Sub
+    
+CleanFail:
+    870     errText = Err.Description
+    880     Debug.Print Format(Now, "hh:nn:ss"), "ERROR", "Line=" & Erl, "Number=" & Err.Number, "Step=" & gLastStep, "Description=" & errText
+    890     Application.StatusBar = False
+    900     Application.ScreenUpdating = True
+    910     Application.EnableEvents = True
+    920     Application.DisplayAlerts = True
+    930     MsgBox "Error line: " & Erl & vbCrLf & _
+                   "Error number: " & Err.Number & vbCrLf & _
+                   "Last step: " & gLastStep & vbCrLf & vbCrLf & _
+                   errText, vbCritical, "Taiwan Transfer Macro"
+End Sub
+
+Private Function CollectTransferRows(ByVal wb As Workbook, ByVal sourceSheetNames As Variant, ByRef transfers() As TransferRow) As Long
+    Dim ws As Worksheet
+    Dim i As Long
+    Dim lastRow As Long
+    Dim rowIndex As Long
+    Dim actionCol As Long, skuCol As Long, gtinCol As Long
+    Dim dailySalesCol As Long, totalStockCol As Long, qtyCol As Long, shelfCol As Long
+    Dim normalizedAction As String
+    Dim count As Long
+    
+    count = 0
+    
+    For i = LBound(sourceSheetNames) To UBound(sourceSheetNames)
+        Set ws = GetWorksheetByName(wb, CStr(sourceSheetNames(i)))
+        If ws Is Nothing Then
+            Err.Raise vbObjectError + 1100, , "Missing source sheet: " & CStr(sourceSheetNames(i)) & " in workbook " & wb.Name
+        End If
+        
+        actionCol = GetHeaderColumnOrFail(ws, "action")
+        skuCol = GetHeaderColumnOrFail(ws, "SKU")
+        gtinCol = GetHeaderColumnOrFail(ws, "GTIN")
+        dailySalesCol = GetHeaderColumnOrFail(ws, "Daily Sales")
+        totalStockCol = GetHeaderColumnOrFail(ws, "Total Stock")
+        qtyCol = GetHeaderColumnOrFail(ws, "数量")
+        shelfCol = GetHeaderColumnOrFail(ws, "shelf")
+        
+        lastRow = GetLastUsedRow(ws)
+        If lastRow < 2 Then GoTo NextSheet
+        
+        For rowIndex = 2 To lastRow
+            If Not ws.Rows(rowIndex).Hidden Then
+                normalizedAction = NormalizeValue(ws.Cells(rowIndex, actionCol).Value)
+                If normalizedAction = "transfer" Then
+                    count = count + 1
+                    ReDim Preserve transfers(1 To count)
+                    
+                    transfers(count).SKU = Trim$(CStr(ws.Cells(rowIndex, skuCol).Value))
+                    transfers(count).GTIN = Trim$(CStr(ws.Cells(rowIndex, gtinCol).Value))
+                    transfers(count).DailySales = ws.Cells(rowIndex, dailySalesCol).Value
+                    transfers(count).TotalStock = ws.Cells(rowIndex, totalStockCol).Value
+                    transfers(count).QtyRaw = ws.Cells(rowIndex, qtyCol).Value
+                    transfers(count).QtyForBigseller = NormalizeQtyForBigseller(ws.Cells(rowIndex, qtyCol).Value)
+                    transfers(count).Shelf = Trim$(CStr(ws.Cells(rowIndex, shelfCol).Value))
+                End If
+            End If
+        Next rowIndex
+        
+NextSheet:
+    Next i
+    
+    CollectTransferRows = count
+End Function
+
+Private Sub BuildBigsellerFile(ByVal filePath As String, ByRef transfers() As TransferRow, ByVal transferCount As Long)
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim colProvisional As Long, colShipping As Long, colReceiving As Long
+    Dim colSKU As Long, colQty As Long
+    Dim rowIndex As Long
+    
+    Set wb = Workbooks.Open(Filename:=filePath, UpdateLinks:=False, ReadOnly:=False)
+    On Error GoTo BigsellerFail
+    Set ws = wb.Worksheets(1)
+    
+    colProvisional = GetHeaderColumnOrFail(ws, "*Provisional No.(Required)")
+    colShipping = GetHeaderColumnOrFail(ws, "*Shipping Warehouse(Required)")
+    colReceiving = GetHeaderColumnOrFail(ws, "*Receiving Warehouse(Required)")
+    colSKU = GetHeaderColumnOrFail(ws, "*Merchant SKU(Required)")
+    colQty = GetHeaderColumnOrFail(ws, "*Transfer Qty(Required)")
+    
+    ClearDataRows ws
+    
+    For rowIndex = 1 To transferCount
+        ws.Cells(rowIndex + 1, colProvisional).Value = 1
+        ws.Cells(rowIndex + 1, colShipping).Value = "default warehouse"
+        ws.Cells(rowIndex + 1, colReceiving).Value = "Taiwan"
+        ws.Cells(rowIndex + 1, colSKU).Value = transfers(rowIndex).SKU
+        ws.Cells(rowIndex + 1, colQty).Value = transfers(rowIndex).QtyForBigseller
+    Next rowIndex
+    
+    wb.Save
+    wb.Close SaveChanges:=False
+    Exit Sub
+    
+BigsellerFail:
+    On Error Resume Next
+    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
+    Err.Raise Err.Number, , Err.Description
+End Sub
+
+Private Sub BuildTaiwanTransferFile(ByVal filePath As String, ByRef transfers() As TransferRow, ByVal transferCount As Long)
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim colSKU As Long, colGTIN As Long, colDailySales As Long
+    Dim colTaiwanStock As Long, colQty As Long, colShelf As Long
+    Dim rowIndex As Long
+    
+    Set wb = Workbooks.Open(Filename:=filePath, UpdateLinks:=False, ReadOnly:=False)
+    On Error GoTo TaiwanFail
+    Set ws = wb.Worksheets(1)
+    
+    colSKU = GetHeaderColumnOrFail(ws, "SKU编号")
+    colGTIN = GetHeaderColumnOrFail(ws, "GTIN")
+    colDailySales = GetHeaderColumnOrFail(ws, "预测日销量")
+    colTaiwanStock = GetHeaderColumnOrFail(ws, "台湾库存")
+    colQty = GetHeaderColumnOrFail(ws, "调拨数量")
+    colShelf = GetHeaderColumnOrFail(ws, "台湾货架位")
+    
+    ClearDataRows ws
+    
+    For rowIndex = 1 To transferCount
+        ws.Cells(rowIndex + 1, colSKU).Value = transfers(rowIndex).SKU
+        ws.Cells(rowIndex + 1, colGTIN).Value = transfers(rowIndex).GTIN
+        ws.Cells(rowIndex + 1, colDailySales).Value = transfers(rowIndex).DailySales
+        ws.Cells(rowIndex + 1, colTaiwanStock).Value = transfers(rowIndex).TotalStock
+        ws.Cells(rowIndex + 1, colQty).Value = transfers(rowIndex).QtyRaw
+        ws.Cells(rowIndex + 1, colShelf).Value = transfers(rowIndex).Shelf
+    Next rowIndex
+    
+    wb.Save
+    wb.Close SaveChanges:=False
+    Exit Sub
+    
+TaiwanFail:
+    On Error Resume Next
+    If Not wb Is Nothing Then wb.Close SaveChanges:=False
+    On Error GoTo 0
+    Err.Raise Err.Number, , Err.Description
+End Sub
+
+Private Function GetHeaderColumnOrFail(ByVal ws As Worksheet, ByVal expectedHeader As String) As Long
+    Dim col As Long
+    Dim lastCol As Long
+    Dim cellText As String
+    Dim targetHeader As String
+    
+    targetHeader = NormalizeHeader(expectedHeader)
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    
+    For col = 1 To lastCol
+        cellText = NormalizeHeader(CStr(ws.Cells(1, col).Value))
+        If cellText = targetHeader Then
+            GetHeaderColumnOrFail = col
+            Exit Function
+        End If
+    Next col
+    
+    Err.Raise vbObjectError + 1200, , "Missing header """ & expectedHeader & """ in sheet """ & ws.Name & """ of workbook """ & ws.Parent.Name & """."
+End Function
+
+Private Function NormalizeHeader(ByVal value As String) As String
+    Dim s As String
+    s = LCase$(CStr(value))
+    s = Replace(s, vbCr, vbNullString)
+    s = Replace(s, vbLf, vbNullString)
+    s = Replace(s, vbTab, vbNullString)
+    s = Replace(s, Chr$(160), vbNullString)
+    s = Replace(s, " ", vbNullString)
+    NormalizeHeader = Trim$(s)
+End Function
+
+Private Function NormalizeValue(ByVal value As Variant) As String
+    Dim s As String
+    s = LCase$(Trim$(CStr(value)))
+    s = Replace(s, vbCr, vbNullString)
+    s = Replace(s, vbLf, vbNullString)
+    NormalizeValue = s
+End Function
+
+Private Function NormalizeQtyForBigseller(ByVal value As Variant) As Variant
+    If IsError(value) Then
+        NormalizeQtyForBigseller = vbNullString
+    ElseIf Len(Trim$(CStr(value))) = 0 Then
+        NormalizeQtyForBigseller = vbNullString
+    ElseIf IsNumeric(value) Then
+        NormalizeQtyForBigseller = CDbl(value)
+    Else
+        NormalizeQtyForBigseller = vbNullString
+    End If
+End Function
+
+Private Sub ClearDataRows(ByVal ws As Worksheet)
+    Dim lastRow As Long
+    Dim lastCol As Long
+    
+    lastRow = GetLastUsedRow(ws)
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    
+    If lastRow >= 2 And lastCol >= 1 Then
+        ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, lastCol)).ClearContents
+    End If
+End Sub
+
+Private Function GetLastUsedRow(ByVal ws As Worksheet) As Long
+    Dim lastCell As Range
+    On Error Resume Next
+    Set lastCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, _
+                                 LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlPrevious, MatchCase:=False)
+    On Error GoTo 0
+    
+    If lastCell Is Nothing Then
+        GetLastUsedRow = 1
+    Else
+        GetLastUsedRow = lastCell.Row
+    End If
+End Function
+
+Private Function GetLatestDatedFile(ByVal folderPath As String, ByVal prefix As String, ByVal extensionWithDot As String) As String
+    Dim fileName As String
+    Dim bestPath As String
+    Dim bestDateText As String
+    Dim currentDateText As String
+    
+    fileName = Dir$(folderPath & prefix & "*" & extensionWithDot, vbNormal)
+    Do While Len(fileName) > 0
+        currentDateText = ExtractDateStampFromName(fileName, prefix, extensionWithDot)
+        If Len(currentDateText) > 0 Then
+            If Len(bestDateText) = 0 Or currentDateText > bestDateText Then
+                bestDateText = currentDateText
+                bestPath = folderPath & fileName
+            End If
+        End If
+        fileName = Dir$
+    Loop
+    
+    GetLatestDatedFile = bestPath
+End Function
+
+Private Function ExtractDateStampFromName(ByVal fileName As String, ByVal prefix As String, ByVal extensionWithDot As String) As String
+    Dim coreName As String
+    coreName = fileName
+    
+    If LCase$(Left$(coreName, Len(prefix))) <> LCase$(prefix) Then Exit Function
+    If LCase$(Right$(coreName, Len(extensionWithDot))) <> LCase$(extensionWithDot) Then Exit Function
+    
+    coreName = Mid$(coreName, Len(prefix) + 1)
+    coreName = Left$(coreName, Len(coreName) - Len(extensionWithDot))
+    coreName = Trim$(coreName)
+    
+    If Len(coreName) >= 8 And Len(coreName) <= 14 And IsAllDigits(coreName) Then
+        ExtractDateStampFromName = coreName
+    End If
+End Function
+
+Private Sub RecycleAllMatchingDatedFiles(ByVal folderPath As String, ByVal prefix As String, ByVal extensionWithDot As String, ByVal excludeFullPath As String)
+    Dim fileName As String
+    Dim fullPath As String
+    Dim pathsToRecycle As Collection
+    Dim item As Variant
+    
+    Set pathsToRecycle = New Collection
+    
+    fileName = Dir$(folderPath & prefix & "*" & extensionWithDot, vbNormal)
+    Do While Len(fileName) > 0
+        fullPath = folderPath & fileName
+        If StrComp(fullPath, excludeFullPath, vbTextCompare) <> 0 Then
+            If Len(ExtractDateStampFromName(fileName, prefix, extensionWithDot)) > 0 Then
+                pathsToRecycle.Add fullPath
+            End If
+        End If
+        fileName = Dir$
+    Loop
+    
+    For Each item In pathsToRecycle
+        TraceStep "Recycling old Bigseller file: " & CStr(item)
+        RecycleFile CStr(item)
+    Next item
+End Sub
+
+Private Sub MoveFileReplacingIfNeeded(ByVal sourcePath As String, ByVal targetPath As String)
+    CopyThenDeleteSource sourcePath, targetPath, True
+End Sub
+
+Private Sub RecycleIfExists(ByVal filePath As String)
+    If FileExists(filePath) Then
+        EnsureWorkbookClosed filePath
+        RecycleFile filePath
+    End If
+End Sub
+
+Private Sub DeleteIfExists(ByVal filePath As String)
+    If FileExists(filePath) Then
+        DeleteFilePermanently filePath
+    End If
+End Sub
+
+Private Sub CopyThenDeleteSource(ByVal sourcePath As String, ByVal targetPath As String, Optional ByVal replaceTarget As Boolean = False)
+    If Not FileExists(sourcePath) Then
+        Err.Raise vbObjectError + 1500, , "Source file not found: " & sourcePath
+    End If
+    
+    EnsureWorkbookClosed sourcePath
+    If replaceTarget Then DeleteIfExists targetPath
+    
+    FileCopy sourcePath, targetPath
+    If Not FileExists(targetPath) Then
+        Err.Raise vbObjectError + 1501, , "Failed to create target file: " & targetPath
+    End If
+    
+    DeleteFilePermanently sourcePath
+    If FileExists(sourcePath) Then
+        Err.Raise vbObjectError + 1502, , "Failed to remove source file after copying: " & sourcePath
+    End If
+End Sub
+
+Private Function BuildTaiwanTimestampPath(ByVal folderPath As String) As String
+    Dim stamp As String
+    stamp = Format(Now, "yyyymmddhhss")
+    BuildTaiwanTimestampPath = IncludeTrailingSlash(folderPath) & TAIWAN_PREFIX & stamp & TAIWAN_EXT
+End Function
+
+Private Function RenameTaiwanFileWithTimestamp(ByVal sourcePath As String) As String
+    Dim folderPath As String
+    Dim baseTargetPath As String
+    Dim targetPath As String
+    Dim counter As Long
+    
+    folderPath = Left$(sourcePath, InStrRev(sourcePath, "\"))
+    baseTargetPath = BuildTaiwanTimestampPath(folderPath)
+    targetPath = baseTargetPath
+    
+    If StrComp(sourcePath, targetPath, vbTextCompare) = 0 Then
+        RenameTaiwanFileWithTimestamp = sourcePath
+        Exit Function
+    End If
+    
+    counter = 1
+    Do While FileExists(targetPath)
+        targetPath = Left$(baseTargetPath, Len(baseTargetPath) - Len(TAIWAN_EXT)) & "_" & CStr(counter) & TAIWAN_EXT
+        counter = counter + 1
+    Loop
+    
+    EnsureWorkbookClosed sourcePath
+    Name sourcePath As targetPath
+    If Not FileExists(targetPath) Then
+        Err.Raise vbObjectError + 1600, , "Failed to rename Taiwan OneDrive file to: " & targetPath
+    End If
+    RenameTaiwanFileWithTimestamp = targetPath
+End Function
+
+Private Function GetAvailableFilePath(ByVal preferredPath As String) As String
+    Dim folderPath As String
+    Dim baseName As String
+    Dim extensionWithDot As String
+    Dim candidatePath As String
+    Dim n As Long
+    
+    If Not FileExists(preferredPath) Then
+        GetAvailableFilePath = preferredPath
+        Exit Function
+    End If
+    
+    folderPath = Left$(preferredPath, InStrRev(preferredPath, "\"))
+    baseName = Mid$(preferredPath, InStrRev(preferredPath, "\") + 1)
+    extensionWithDot = Mid$(baseName, InStrRev(baseName, "."))
+    baseName = Left$(baseName, Len(baseName) - Len(extensionWithDot))
+    
+    n = 1
+    Do
+        candidatePath = folderPath & baseName & "_" & Format(Now, "yyyymmdd_hhnnss") & "_" & CStr(n) & extensionWithDot
+        If Not FileExists(candidatePath) Then
+            GetAvailableFilePath = candidatePath
+            Exit Do
+        End If
+        n = n + 1
+    Loop
+End Function
+
+Private Function IsAllDigits(ByVal textValue As String) As Boolean
+    Dim i As Long
+    If Len(textValue) = 0 Then Exit Function
+    For i = 1 To Len(textValue)
+        If Mid$(textValue, i, 1) < "0" Or Mid$(textValue, i, 1) > "9" Then Exit Function
+    Next i
+    IsAllDigits = True
+End Function
+
+Private Function FileExists(ByVal filePath As String) As Boolean
+    FileExists = (Len(Dir$(filePath, vbNormal Or vbReadOnly Or vbHidden Or vbSystem)) > 0)
+End Function
+
+Private Sub RecycleFile(ByVal filePath As String)
+    Dim cmd As String
+    
+    If Not FileExists(filePath) Then Exit Sub
+    EnsureWorkbookClosed filePath
+    
+    cmd = "powershell -NoProfile -ExecutionPolicy Bypass -Command " & _
+          Chr(34) & _
+          "$path = [IO.Path]::GetFullPath('" & Replace(filePath, "'", "''") & "'); " & _
+          "Add-Type -AssemblyName Microsoft.VisualBasic; " & _
+          "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($path,'OnlyErrorDialogs','SendToRecycleBin')" & _
+          Chr(34)
+    
+    Shell cmd, vbHide
+    WaitForFileGone filePath, 5
+    
+    If FileExists(filePath) Then
+        Err.Raise vbObjectError + 1300, , "Failed to move file to Recycle Bin: " & filePath & _
+            vbCrLf & "The file may still be open or locked."
+    End If
+End Sub
+
+Private Sub DeleteFilePermanently(ByVal filePath As String)
+    If Not FileExists(filePath) Then Exit Sub
+    EnsureWorkbookClosed filePath
+    SetFileWritable filePath
+    Kill filePath
+End Sub
+
+Private Sub SetFileWritable(ByVal filePath As String)
+    On Error Resume Next
+    SetAttr filePath, vbNormal
+    On Error GoTo 0
+End Sub
+
+Private Sub ValidateFolderExists(ByVal folderPath As String, ByVal folderLabel As String)
+    Dim normalizedPath As String
+    normalizedPath = IncludeTrailingSlash(folderPath)
+    If Dir$(normalizedPath, vbDirectory) = vbNullString Then
+        Err.Raise vbObjectError + 1400, , folderLabel & " does not exist: " & normalizedPath
+    End If
+End Sub
+
+Private Function GetWorksheetByName(ByVal wb As Workbook, ByVal sheetName As String) As Worksheet
+    On Error Resume Next
+    Set GetWorksheetByName = wb.Worksheets(sheetName)
+    On Error GoTo 0
+End Function
+
+Private Function IncludeTrailingSlash(ByVal folderPath As String) As String
+    If Right$(folderPath, 1) = "\" Then
+        IncludeTrailingSlash = folderPath
+    Else
+        IncludeTrailingSlash = folderPath & "\"
+    End If
+End Function
+
+Private Function GetFileNameOnly(ByVal fullPath As String) As String
+    GetFileNameOnly = Mid$(fullPath, InStrRev(fullPath, "\") + 1)
+End Function
+
+Private Sub OpenFileInExcel(ByVal filePath As String, Optional ByVal fileLabel As String = "Output file")
+    If FileExists(filePath) Then
+        Workbooks.Open Filename:=filePath, UpdateLinks:=False, ReadOnly:=False
+    Else
+        MsgBox fileLabel & " was not found or could not be opened:" & vbCrLf & vbCrLf & filePath, _
+               vbExclamation, "Open Output File"
+    End If
+End Sub
+
+Private Sub EnsureWorkbookClosed(ByVal filePath As String)
+    Dim wb As Workbook
+    Dim targetPath As String
+    
+    targetPath = LCase$(filePath)
+    For Each wb In Application.Workbooks
+        If LCase$(wb.FullName) = targetPath Then
+            wb.Close SaveChanges:=False
+            Exit For
+        End If
+    Next wb
+End Sub
+
+Private Sub TraceStep(ByVal msg As String)
+    gLastStep = msg
+    Debug.Print Format(Now, "hh:nn:ss"), msg
+    Application.StatusBar = msg
+End Sub
+
+Private Sub WaitForFileGone(ByVal filePath As String, ByVal timeoutSeconds As Long)
+    Dim started As Single
+    started = Timer
+    
+    Do While FileExists(filePath)
+        DoEvents
+        Application.Wait Now + TimeSerial(0, 0, 1)
+        If Timer - started >= timeoutSeconds Then Exit Do
+    Loop
+End Sub
