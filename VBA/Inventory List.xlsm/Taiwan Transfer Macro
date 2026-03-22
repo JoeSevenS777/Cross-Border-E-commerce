@@ -13,6 +13,8 @@ Private Const DEBUG_MODE As Boolean = False
 Private Const TAIWAN_WORKING_HEADERS As String = "SKU编号|GTIN|预测日销量|台湾库存|调拨数量|台湾货架位"
 Private Const BIGSELLER_WORKING_HEADERS As String = "*Provisional No.(Required)|*Shipping Warehouse(Required)|*Receiving Warehouse(Required)|*Merchant SKU(Required)|*Transfer Qty(Required)|Ship Fee|Tracking No.|Cost Allocation Method (Price/Quantity/Volume/Weight)|Estimated Arrival Date|Note"
 Private Const BIGSELLER_SHEET_NAME As String = "SKU"
+Private Const BIGSELLER_TIMESTAMP_FORMAT As String = "yyyymmddhhnnss"
+Private Const TAIWAN_TIMESTAMP_FORMAT As String = "yyyymmddhhnnss"
 
 Private Type TransferRow
     SKU As String
@@ -42,7 +44,7 @@ Public Sub CreateTaiwanTransferDocuments()
     TraceStep "Start macro"
     
     sourceSheetNames = Array("采菁", "萌睫", "Flortte", "魔仙", "夹子", "其他备货")
-    todayStamp = Format(Date, "yyyymmdd")
+    todayStamp = Format(Now, "yyyymmddhhnnss")
     baseFolder = IncludeTrailingSlash(ThisWorkbook.Path)
     
     If Len(baseFolder) = 0 Then
@@ -145,7 +147,6 @@ NextSheet:
 End Function
 
 Private Sub CreateFreshBigsellerFile(ByVal filePath As String, ByRef transfers() As TransferRow, ByVal transferCount As Long)
-    RecycleIfExists filePath
     CreateBlankBigsellerWorkbook filePath
     BuildBigsellerFile filePath, transfers, transferCount
 End Sub
@@ -396,7 +397,7 @@ End Sub
 
 Private Function BuildTaiwanTimestampPath(ByVal folderPath As String) As String
     Dim stamp As String
-    stamp = Format(Now, "yyyymmddhhnnss")
+    stamp = Format(Now, TAIWAN_TIMESTAMP_FORMAT)
     BuildTaiwanTimestampPath = IncludeTrailingSlash(folderPath) & TAIWAN_PREFIX & stamp & TAIWAN_EXT
 End Function
 
