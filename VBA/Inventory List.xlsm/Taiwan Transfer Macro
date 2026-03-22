@@ -10,6 +10,9 @@ Private Const TAIWAN_EXT As String = ".xlsm"
 Private Const ONEDRIVE_FOLDER As String = "C:\Users\zouzh\OneDrive\"
 Private Const TAIWAN_LOG_FOLDER As String = "D:\JoeProgramFiles\inventory\Taiwan transfer logs\"
 Private Const DEBUG_MODE As Boolean = False
+Private Const TAIWAN_WORKING_HEADERS As String = "SKU编号|GTIN|预测日销量|台湾库存|调拨数量|台湾货架位"
+Private Const BIGSELLER_WORKING_HEADERS As String = "*Provisional No.(Required)|*Shipping Warehouse(Required)|*Receiving Warehouse(Required)|*Merchant SKU(Required)|*Transfer Qty(Required)|Ship Fee|Tracking No.|Cost Allocation Method (Price/Quantity/Volume/Weight)|Estimated Arrival Date|Note"
+Private Const BIGSELLER_SHEET_NAME As String = "SKU"
 
 Private Type TransferRow
     SKU As String
@@ -27,7 +30,6 @@ Public Sub CreateTaiwanTransferDocuments()
     Dim transferCount As Long
     Dim todayStamp As String
     Dim baseFolder As String
-    Dim bigsellerTemplatePath As String
     Dim bigsellerOutputPath As String
     Dim taiwanCurrentPath As String
     Dim taiwanRenamedPath As String
@@ -57,23 +59,12 @@ Public Sub CreateTaiwanTransferDocuments()
         GoTo CleanExit
     End If
     
-    bigsellerTemplatePath = GetLatestDatedFile(baseFolder, BIGSELLER_PREFIX, BIGSELLER_EXT)
-    If Len(bigsellerTemplatePath) = 0 Then
-        Err.Raise vbObjectError + 1001, , "No file matching """ & BIGSELLER_PREFIX & """ was found in: " & baseFolder
-    End If
-    
-    taiwanCurrentPath = GetLatestDatedFile(IncludeTrailingSlash(ONEDRIVE_FOLDER), TAIWAN_PREFIX, TAIWAN_EXT)
-    If Len(taiwanCurrentPath) = 0 Then
-        Err.Raise vbObjectError + 1002, , "No file matching """ & TAIWAN_PREFIX & """ was found in: " & IncludeTrailingSlash(ONEDRIVE_FOLDER)
-    End If
-    
     bigsellerOutputPath = baseFolder & BIGSELLER_PREFIX & todayStamp & BIGSELLER_EXT
+    taiwanCurrentPath = EnsureTaiwanWorkingFile(IncludeTrailingSlash(ONEDRIVE_FOLDER), IncludeTrailingSlash(TAIWAN_LOG_FOLDER))
     taiwanLogCopyPath = GetAvailableFilePath(IncludeTrailingSlash(TAIWAN_LOG_FOLDER) & GetFileNameOnly(taiwanCurrentPath))
     
-    TraceStep "Build Bigseller output"
-    RecycleIfExists bigsellerOutputPath
-    FileCopy bigsellerTemplatePath, bigsellerOutputPath
-    BuildBigsellerFile bigsellerOutputPath, transfers, transferCount
+    TraceStep "Create Bigseller file"
+    CreateFreshBigsellerFile bigsellerOutputPath, transfers, transferCount
     RecycleOldDatedFiles baseFolder, BIGSELLER_PREFIX, BIGSELLER_EXT, bigsellerOutputPath
     
     TraceStep "Archive and update Taiwan file"
@@ -131,18 +122,18 @@ Private Function CollectTransferRows(ByVal wb As Workbook, ByVal sourceSheetName
         
         For rowIndex = 2 To lastRow
             If Not ws.Rows(rowIndex).Hidden Then
-                normalizedAction = NormalizeValue(ws.Cells(rowIndex, actionCol).value)
+                normalizedAction = NormalizeValue(ws.Cells(rowIndex, actionCol).Value)
                 If normalizedAction = "transfer" Then
                     count = count + 1
                     ReDim Preserve transfers(1 To count)
                     
-                    transfers(count).SKU = Trim$(CStr(ws.Cells(rowIndex, skuCol).value))
-                    transfers(count).GTIN = Trim$(CStr(ws.Cells(rowIndex, gtinCol).value))
-                    transfers(count).DailySales = ws.Cells(rowIndex, dailySalesCol).value
-                    transfers(count).TotalStock = ws.Cells(rowIndex, totalStockCol).value
-                    transfers(count).QtyRaw = ws.Cells(rowIndex, qtyCol).value
-                    transfers(count).QtyForBigseller = NormalizeQtyForBigseller(ws.Cells(rowIndex, qtyCol).value)
-                    transfers(count).Shelf = Trim$(CStr(ws.Cells(rowIndex, shelfCol).value))
+                    transfers(count).SKU = Trim$(CStr(ws.Cells(rowIndex, skuCol).Value))
+                    transfers(count).GTIN = Trim$(CStr(ws.Cells(rowIndex, gtinCol).Value))
+                    transfers(count).DailySales = ws.Cells(rowIndex, dailySalesCol).Value
+                    transfers(count).TotalStock = ws.Cells(rowIndex, totalStockCol).Value
+                    transfers(count).QtyRaw = ws.Cells(rowIndex, qtyCol).Value
+                    transfers(count).QtyForBigseller = NormalizeQtyForBigseller(ws.Cells(rowIndex, qtyCol).Value)
+                    transfers(count).Shelf = Trim$(CStr(ws.Cells(rowIndex, shelfCol).Value))
                 End If
             End If
         Next rowIndex
@@ -153,6 +144,12 @@ NextSheet:
     CollectTransferRows = count
 End Function
 
+Private Sub CreateFreshBigsellerFile(ByVal filePath As String, ByRef transfers() As TransferRow, ByVal transferCount As Long)
+    RecycleIfExists filePath
+    CreateBlankBigsellerWorkbook filePath
+    BuildBigsellerFile filePath, transfers, transferCount
+End Sub
+
 Private Sub BuildBigsellerFile(ByVal filePath As String, ByRef transfers() As TransferRow, ByVal transferCount As Long)
     Dim wb As Workbook
     Dim ws As Worksheet
@@ -160,7 +157,7 @@ Private Sub BuildBigsellerFile(ByVal filePath As String, ByRef transfers() As Tr
     Dim colSKU As Long, colQty As Long
     Dim rowIndex As Long
     
-    Set wb = Workbooks.Open(fileName:=filePath, UpdateLinks:=False, ReadOnly:=False)
+    Set wb = Workbooks.Open(Filename:=filePath, UpdateLinks:=False, ReadOnly:=False)
     On Error GoTo BigsellerFail
     Set ws = wb.Worksheets(1)
     
@@ -173,11 +170,11 @@ Private Sub BuildBigsellerFile(ByVal filePath As String, ByRef transfers() As Tr
     ClearDataRows ws
     
     For rowIndex = 1 To transferCount
-        ws.Cells(rowIndex + 1, colProvisional).value = 1
-        ws.Cells(rowIndex + 1, colShipping).value = "default warehouse"
-        ws.Cells(rowIndex + 1, colReceiving).value = "Taiwan"
-        ws.Cells(rowIndex + 1, colSKU).value = transfers(rowIndex).SKU
-        ws.Cells(rowIndex + 1, colQty).value = transfers(rowIndex).QtyForBigseller
+        ws.Cells(rowIndex + 1, colProvisional).Value = 1
+        ws.Cells(rowIndex + 1, colShipping).Value = "default warehouse"
+        ws.Cells(rowIndex + 1, colReceiving).Value = "Taiwan"
+        ws.Cells(rowIndex + 1, colSKU).Value = transfers(rowIndex).SKU
+        ws.Cells(rowIndex + 1, colQty).Value = transfers(rowIndex).QtyForBigseller
     Next rowIndex
     
     wb.Save
@@ -198,7 +195,7 @@ Private Sub BuildTaiwanTransferFile(ByVal filePath As String, ByRef transfers() 
     Dim colTaiwanStock As Long, colQty As Long, colShelf As Long
     Dim rowIndex As Long
     
-    Set wb = Workbooks.Open(fileName:=filePath, UpdateLinks:=False, ReadOnly:=False)
+    Set wb = Workbooks.Open(Filename:=filePath, UpdateLinks:=False, ReadOnly:=False)
     On Error GoTo TaiwanFail
     Set ws = wb.Worksheets(1)
     
@@ -212,12 +209,12 @@ Private Sub BuildTaiwanTransferFile(ByVal filePath As String, ByRef transfers() 
     ClearDataRows ws
     
     For rowIndex = 1 To transferCount
-        ws.Cells(rowIndex + 1, colSKU).value = transfers(rowIndex).SKU
-        ws.Cells(rowIndex + 1, colGTIN).value = transfers(rowIndex).GTIN
-        ws.Cells(rowIndex + 1, colDailySales).value = transfers(rowIndex).DailySales
-        ws.Cells(rowIndex + 1, colTaiwanStock).value = transfers(rowIndex).TotalStock
-        ws.Cells(rowIndex + 1, colQty).value = transfers(rowIndex).QtyRaw
-        ws.Cells(rowIndex + 1, colShelf).value = transfers(rowIndex).Shelf
+        ws.Cells(rowIndex + 1, colSKU).Value = transfers(rowIndex).SKU
+        ws.Cells(rowIndex + 1, colGTIN).Value = transfers(rowIndex).GTIN
+        ws.Cells(rowIndex + 1, colDailySales).Value = transfers(rowIndex).DailySales
+        ws.Cells(rowIndex + 1, colTaiwanStock).Value = transfers(rowIndex).TotalStock
+        ws.Cells(rowIndex + 1, colQty).Value = transfers(rowIndex).QtyRaw
+        ws.Cells(rowIndex + 1, colShelf).Value = transfers(rowIndex).Shelf
     Next rowIndex
     
     wb.Save
@@ -238,10 +235,10 @@ Private Function GetHeaderColumnOrFail(ByVal ws As Worksheet, ByVal expectedHead
     Dim targetHeader As String
     
     targetHeader = NormalizeHeader(expectedHeader)
-    lastCol = ws.Cells(1, ws.Columns.count).End(xlToLeft).Column
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
     
     For col = 1 To lastCol
-        cellText = NormalizeHeader(CStr(ws.Cells(1, col).value))
+        cellText = NormalizeHeader(CStr(ws.Cells(1, col).Value))
         If cellText = targetHeader Then
             GetHeaderColumnOrFail = col
             Exit Function
@@ -287,7 +284,7 @@ Private Sub ClearDataRows(ByVal ws As Worksheet)
     Dim lastCol As Long
     
     lastRow = GetLastUsedRow(ws)
-    lastCol = ws.Cells(1, ws.Columns.count).End(xlToLeft).Column
+    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
     
     If lastRow >= 2 And lastCol >= 1 Then
         ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, lastCol)).ClearContents
@@ -327,6 +324,34 @@ Private Function GetLatestDatedFile(ByVal folderPath As String, ByVal prefix As 
     Loop
     
     GetLatestDatedFile = bestPath
+End Function
+
+Private Function EnsureTaiwanWorkingFile(ByVal oneDriveFolder As String, ByVal logFolder As String) As String
+    Dim currentPath As String
+    Dim sourceTemplatePath As String
+    Dim newPath As String
+    
+    currentPath = GetLatestDatedFile(oneDriveFolder, TAIWAN_PREFIX, TAIWAN_EXT)
+    If Len(currentPath) > 0 Then
+        EnsureTaiwanWorkingFile = currentPath
+        Exit Function
+    End If
+    
+    TraceStep "Taiwan working file not found in OneDrive. Creating one."
+    sourceTemplatePath = GetLatestDatedFile(logFolder, TAIWAN_PREFIX, TAIWAN_EXT)
+    newPath = BuildTaiwanTimestampPath(oneDriveFolder)
+    
+    If Len(sourceTemplatePath) > 0 Then
+        FileCopy sourceTemplatePath, newPath
+    Else
+        CreateBlankTaiwanWorkbook newPath
+    End If
+    
+    If Not FileExists(newPath) Then
+        Err.Raise vbObjectError + 1002, , "Failed to create Taiwan working file in: " & oneDriveFolder
+    End If
+    
+    EnsureTaiwanWorkingFile = newPath
 End Function
 
 Private Function ExtractDateStampFromName(ByVal fileName As String, ByVal prefix As String, ByVal extensionWithDot As String) As String
@@ -374,6 +399,38 @@ Private Function BuildTaiwanTimestampPath(ByVal folderPath As String) As String
     stamp = Format(Now, "yyyymmddhhnnss")
     BuildTaiwanTimestampPath = IncludeTrailingSlash(folderPath) & TAIWAN_PREFIX & stamp & TAIWAN_EXT
 End Function
+
+Private Sub CreateBlankTaiwanWorkbook(ByVal filePath As String)
+    CreateWorkbookWithHeaders filePath, Split(TAIWAN_WORKING_HEADERS, "|"), xlOpenXMLWorkbookMacroEnabled, vbNullString
+End Sub
+
+Private Sub CreateBlankBigsellerWorkbook(ByVal filePath As String)
+    CreateWorkbookWithHeaders filePath, Split(BIGSELLER_WORKING_HEADERS, "|"), xlOpenXMLWorkbook, BIGSELLER_SHEET_NAME
+End Sub
+
+Private Sub CreateWorkbookWithHeaders(ByVal filePath As String, ByVal headers As Variant, ByVal fileFormat As XlFileFormat, Optional ByVal sheetName As String = vbNullString)
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim i As Long
+    
+    Set wb = Workbooks.Add(xlWBATWorksheet)
+    Set ws = wb.Worksheets(1)
+    
+    If Len(sheetName) > 0 Then
+        On Error Resume Next
+        ws.Name = sheetName
+        On Error GoTo 0
+    End If
+    
+    For i = LBound(headers) To UBound(headers)
+        ws.Cells(1, i + 1).Value = headers(i)
+    Next i
+    
+    Application.DisplayAlerts = False
+    wb.SaveAs Filename:=filePath, FileFormat:=fileFormat
+    Application.DisplayAlerts = True
+    wb.Close SaveChanges:=False
+End Sub
 
 Private Function RenameTaiwanFileWithTimestamp(ByVal sourcePath As String) As String
     Dim folderPath As String
@@ -498,7 +555,7 @@ End Function
 
 Private Sub OpenFileInExcel(ByVal filePath As String, Optional ByVal fileLabel As String = "Output file")
     If FileExists(filePath) Then
-        Workbooks.Open fileName:=filePath, UpdateLinks:=False, ReadOnly:=False
+        Workbooks.Open Filename:=filePath, UpdateLinks:=False, ReadOnly:=False
     Else
         MsgBox fileLabel & " was not found or could not be opened:" & vbCrLf & vbCrLf & filePath, vbExclamation, "Open Output File"
     End If
@@ -546,5 +603,3 @@ Private Sub WaitForFileGone(ByVal filePath As String, ByVal timeoutSeconds As Lo
         If Timer - started >= timeoutSeconds Then Exit Do
     Loop
 End Sub
-
-
