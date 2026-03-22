@@ -25,7 +25,7 @@ A **production-grade VBA automation system** that:
 * Extracts transfer data from multiple inventory sheets
 * Generates **Bigseller import files automatically**
 * Updates **Taiwan warehouse transfer records in OneDrive**
-* Handles missing files, header variations, and edge cases robustly
+* Handles header variations and operational edge cases robustly
 
 Designed for **real-world cross-border e-commerce operations** where reliability and repeatability matter.
 
@@ -69,27 +69,43 @@ Designed for **real-world cross-border e-commerce operations** where reliability
 
 ### 4. 📦 Bigseller File Generation (Always Fresh)
 
-* Always creates:
+* Always creates a uniquely timestamped file:
 
 ```text
-Bigseller调拨导入YYYYMMDD.xlsx
+Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 ```
 
 * Structure:
 
   * Sheet name: `SKU`
-  * Exact required headers
+  * Exact required headers (row 1):
 
-* Auto-fills:
+| Column Order | Header                                                |
+| ------------ | ----------------------------------------------------- |
+| 1            | *Provisional No.(Required)                            |
+| 2            | *Shipping Warehouse(Required)                         |
+| 3            | *Receiving Warehouse(Required)                        |
+| 4            | *Merchant SKU(Required)                               |
+| 5            | *Transfer Qty(Required)                               |
+| 6            | Ship Fee                                              |
+| 7            | Tracking No.                                          |
+| 8            | Cost Allocation Method (Price/Quantity/Volume/Weight) |
+| 9            | Estimated Arrival Date                                |
+| 10           | Note                                                  |
 
-  * SKU
-  * Transfer Qty
-  * Warehouse fields
+* Auto-fills per row:
+
+  * `*Provisional No.(Required)` = 1
+  * `*Shipping Warehouse(Required)` = default warehouse
+  * `*Receiving Warehouse(Required)` = Taiwan
+  * `*Merchant SKU(Required)` = SKU
+  * `*Transfer Qty(Required)` = 数量 (numeric only; blanks allowed)
 
 * Automatically:
 
-  * deletes same-day duplicate
-  * recycles all old dated files
+  * creates a fresh file every run
+  * avoids same-day conflicts via timestamp
+  * recycles all other old `Bigseller调拨导入*.xlsx` files
 
 ---
 
@@ -101,14 +117,14 @@ Bigseller调拨导入YYYYMMDD.xlsx
 台湾仓库调拨表*.xlsm
 ```
 
-* If missing:
+* Required behavior:
 
-  1. copy latest from local logs
-  2. OR create new file with headers
+  * the file **must already exist in OneDrive**
+  * if it is missing, the macro shows a clear error message and exits
 
 * Workflow:
 
-  * backup to local logs
+  * backup the current OneDrive file to local logs
   * clear old data
   * write new transfer data
   * rename with timestamp:
@@ -121,12 +137,12 @@ Bigseller调拨导入YYYYMMDD.xlsx
 
 ### 6. ♻️ Safe File Management
 
-* Uses **Recycle Bin (not permanent delete)**
+* Uses **Recycle Bin** for old Bigseller files
 * Auto-handles:
 
   * open file conflicts
-  * missing files
   * duplicate filenames
+  * old dated file cleanup
 
 ---
 
@@ -137,6 +153,7 @@ Stops execution with clear messages when:
 * folder missing
 * sheet missing
 * header missing
+* required Taiwan OneDrive file missing
 
 Ensures:
 
@@ -144,15 +161,14 @@ Ensures:
 
 ---
 
-### 8. ⚙️ Self-Healing Design
+### 8. ⚙️ Stable Production Design
 
-The system automatically recovers from:
+The final workflow is intentionally split:
 
-* missing Bigseller files
-* missing Taiwan files
-* empty datasets
+* **Bigseller** → always create a fresh timestamped export file
+* **Taiwan** → update the existing OneDrive working file, archive a local log copy, then rename the OneDrive file with a timestamp
 
-This makes it suitable for **daily operational use without manual prep**.
+This makes it suitable for **daily operational use** while keeping the Taiwan side compatible with the OneDrive workflow.
 
 ---
 
@@ -160,10 +176,18 @@ This makes it suitable for **daily operational use without manual prep**.
 
 ### Bigseller
 
-| Source | Target       |
-| ------ | ------------ |
-| SKU    | Merchant SKU |
-| 数量     | Transfer Qty |
+| Source | Target                  |
+| ------ | ----------------------- |
+| SKU    | *Merchant SKU(Required) |
+| 数量     | *Transfer Qty(Required) |
+
+Additional fixed values:
+
+| Target                         | Value             |
+| ------------------------------ | ----------------- |
+| *Provisional No.(Required)     | 1                 |
+| *Shipping Warehouse(Required)  | default warehouse |
+| *Receiving Warehouse(Required) | Taiwan            |
 
 ---
 
@@ -184,9 +208,9 @@ This makes it suitable for **daily operational use without manual prep**.
 
 1. Scan all sheets
 2. Extract transfer rows
-3. Create Bigseller file
+3. Create Bigseller file (timestamped)
 4. Recycle old Bigseller files
-5. Backup Taiwan file
+5. Backup current Taiwan OneDrive file to local logs
 6. Update Taiwan file
 7. Rename Taiwan file (timestamp)
 8. Prompt user to open outputs
@@ -210,9 +234,9 @@ Inventory Folder
 
 ## 🧪 Design Principles
 
-* **Idempotent** → safe to run repeatedly
-* **Deterministic** → same input = same output
-* **Fail-fast** → stops early on errors
+* **Idempotent enough for daily use**
+* **Deterministic** → same input = same output structure
+* **Fail-fast** → stops early on missing requirements
 * **Minimal dependencies** → no external libraries
 
 ---
@@ -233,11 +257,16 @@ This macro is ideal if you:
 * Quantity handling:
 
   * keeps blanks if invalid
-  * converts numeric values
+  * converts numeric values for Bigseller
 
 * Rows with:
 
   * `transfer` + empty qty → still exported
+
+* Taiwan prerequisite:
+
+  * `台湾仓库调拨表*.xlsm` must already exist in `C:\Users\zouzh\OneDrive\`
+  * the macro will not rebuild it from logs or create a blank replacement
 
 ---
 
@@ -249,9 +278,9 @@ This macro is ideal if you:
 
 ## 🧭 Future Enhancements (Optional)
 
-* Keep last N Bigseller files instead of deleting all
 * Add execution log file
 * Add UI button inside Excel ribbon
+* Add bilingual README (EN + 中文)
 
 ---
 
