@@ -12,13 +12,11 @@ Automated outer-package label printing for exported packing workbooks in Excel.
 
 ---
 
-## 🔄 Key Update (IMPORTANT)
+## 🔄 Key Updates (IMPORTANT)
 
-### Dynamic Header Detection
+### 1. Dynamic Header Detection
 
 The macro **no longer depends on fixed column positions**.
-
-Instead, it dynamically detects columns based on header names:
 
 | Field    | Header Name |
 | -------- | ----------- |
@@ -26,25 +24,42 @@ Instead, it dynamically detects columns based on header names:
 | Quantity | 实发数量        |
 | Box No   | 箱號 / 箱号     |
 
-👉 This means:
-
-* You can reorder columns freely
-* The macro will still work
-* As long as header names remain unchanged
+👉 Columns can be reordered safely as long as headers remain unchanged.
 
 ---
 
-## 🧪 Data Validation (NEW)
+### 2. Smart Selection Logic (NEW ⭐)
 
-Before generating labels, the macro now performs **strict validation on 实发数量**.
+When selecting cells in the **箱号 column**:
+
+#### Case A — Normal selection
+
+* Only selected cells are processed
+
+#### Case B — Whole column selection
+
+* Treated as: **all non-empty 箱号 cells within data range**
+* Empty cells are automatically ignored
+
+👉 This matches real workflow:
+
+> “Select entire column = process all existing boxes”
+
+---
+
+### 3. Strict Data Validation (Enhanced)
+
+Validation is applied to **selected non-empty 箱号 rows only**.
 
 ### Validation Rules
 
-| Rule            | Condition | Result           |
-| --------------- | --------- | ---------------- |
-| Must be numeric | 非数字       | ❌ Stop + warning |
-| Must be > 0     | ≤ 0       | ❌ Stop + warning |
-| Must be integer | 有小数       | ❌ Stop + warning |
+| Field | Rule            | Result |
+| ----- | --------------- | ------ |
+| SKU编号 | Cannot be empty | ❌ Stop |
+| 实发数量  | Cannot be empty | ❌ Stop |
+| 实发数量  | Must be numeric | ❌ Stop |
+| 实发数量  | Must be > 0     | ❌ Stop |
+| 实发数量  | Must be integer | ❌ Stop |
 
 ### Example Warning
 
@@ -54,9 +69,9 @@ Before generating labels, the macro now performs **strict validation on 实发�
 
 👉 Behavior:
 
-* Validation only checks **selected box rows**
-* Stops immediately when error is found
-* Prevents incorrect label generation
+* Blank rows are ignored
+* Only **real data rows are validated**
+* First invalid row stops the process immediately
 
 ---
 
@@ -64,14 +79,14 @@ Before generating labels, the macro now performs **strict validation on 实发�
 
 ### 1. Active Workbook Workflow
 
-* Macro runs on **current active workbook**
-* No need to copy data into master file
+* Runs on **current active workbook**
+* No data copying required
 
 ---
 
 ### 2. Box-Based Grouping
 
-* Groups all rows by **箱号**
+* Groups rows by **箱号**
 * One label per box
 
 ---
@@ -81,8 +96,8 @@ Before generating labels, the macro now performs **strict validation on 实发�
 Automatically excludes:
 
 * Header row
-* Empty box numbers
-* Invalid rows (missing SKU / quantity / zero / decimal)
+* Empty 箱号 cells
+* Invalid rows (blocked by validation)
 
 ---
 
@@ -97,14 +112,13 @@ Outputs:
 ### 5. Multi-Page Support
 
 * Automatically paginates large boxes
-* Repeats header on each page
+* Repeats header per page
 
 ---
 
 ### 6. Print Preview Workflow
 
-* Always opens preview first
-* Prevents printing errors
+* Always preview before printing
 
 ---
 
@@ -131,21 +145,22 @@ MJ-BBB  *  10
 ## 🧩 Workflow
 
 1. Open exported packing workbook
-2. Select cells in **箱号 column**
+2. Select cells in **箱号 column** (or whole column)
 3. Run macro
-4. Validation runs
+4. Validation runs (only on non-empty rows)
 5. Labels generated → PrintPreview
 
 ---
 
 ## ⚠️ Error Handling Summary
 
-| Scenario           | Behavior                         |
-| ------------------ | -------------------------------- |
-| Missing header     | Stop + show which header missing |
-| No valid selection | Stop                             |
-| Quantity invalid   | Stop + show row + box            |
-| No valid rows      | Detailed diagnostic per box      |
+| Scenario               | Behavior                               |
+| ---------------------- | -------------------------------------- |
+| Missing header         | Stop + show missing headers            |
+| Empty selection        | Stop                                   |
+| Invalid row (selected) | Stop + show row + box                  |
+| Whole column selection | Ignore blanks, validate real data only |
+| No valid rows          | Stop                                   |
 
 ---
 
@@ -157,13 +172,19 @@ This macro enforces **real-world warehouse constraints**:
 * No zero shipment
 * No dirty data allowed into labels
 
-👉 Goal: eliminate downstream errors in logistics & receiving
+At the same time, it improves usability:
+
+* Whole-column selection behaves intuitively
+* Blank rows are ignored
+* Only meaningful data is validated
+
+👉 Goal: balance **data integrity + operational efficiency**
 
 ---
 
 ## 📌 Status
 
-**Stable (Enhanced Validation Version)**
+**Stable (Smart Selection + Strict Validation Version)**
 
 ---
 
@@ -175,7 +196,7 @@ Based on previous version: fileciteturn1file0
 
 ## 🚀 Recommended Next Upgrade
 
-* Show ALL invalid rows at once (instead of first)
+* Show ALL invalid rows at once
 * Auto-highlight invalid rows
 * Export error report
 
