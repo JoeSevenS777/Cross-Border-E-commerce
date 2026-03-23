@@ -56,18 +56,64 @@ Private Sub AddUniqueBox(ByRef col As Collection, ByVal boxNo As String)
     On Error GoTo 0
 End Sub
 
+Private Function NormalizeHeaderText(ByVal v As Variant) As String
+    Dim s As String
+
+    s = CStr(v)
+    s = Replace(s, " ", "")
+    s = Replace(s, vbCr, "")
+    s = Replace(s, vbLf, "")
+    s = Replace(s, ChrW(160), "")
+    s = Trim$(s)
+
+    NormalizeHeaderText = LCase$(s)
+End Function
+
+Private Function FindHeaderColumn(ByVal ws As Worksheet, ByVal headerRow As Long, ByVal headerNames As Variant) As Long
+    Dim lastCol As Long
+    Dim col As Long
+    Dim i As Long
+    Dim cellHeader As String
+    Dim targetHeader As String
+
+    lastCol = ws.Cells(headerRow, ws.Columns.Count).End(xlToLeft).Column
+
+    For col = 1 To lastCol
+        cellHeader = NormalizeHeaderText(ws.Cells(headerRow, col).Value)
+        If cellHeader <> "" Then
+            For i = LBound(headerNames) To UBound(headerNames)
+                targetHeader = NormalizeHeaderText(CStr(headerNames(i)))
+                If cellHeader = targetHeader Then
+                    FindHeaderColumn = col
+                    Exit Function
+                End If
+            Next i
+        End If
+    Next col
+End Function
+
+Private Function GetMaxLastRow(ByVal ws As Worksheet, ParamArray cols() As Variant) As Long
+    Dim i As Long
+    Dim colNum As Long
+    Dim lastRow As Long
+    Dim maxRow As Long
+
+    maxRow = 1
+
+    For i = LBound(cols) To UBound(cols)
+        colNum = CLng(cols(i))
+        lastRow = ws.Cells(ws.Rows.Count, colNum).End(xlUp).Row
+        If lastRow > maxRow Then maxRow = lastRow
+    Next i
+
+    GetMaxLastRow = maxRow
+End Function
+
 Public Sub PrintSelectedBoxLabelsPreview()
 
-    ' Stored in the master workbook, but works on the active workbook / active worksheet.
-    ' Select one or more cells in the 箱號 column of the exported picking & packing sheet,
-    ' then run this macro.
-
-    Const BOX_COL As Long = 9      ' I = 箱號
-    Const SKU_COL As Long = 1      ' A = SKU編號
-    Const QTY_COL As Long = 8      ' H = 實發數量
-
-    Const ROWS_PER_PAGE As Long = 12   ' practical capacity for 100mm × 100mm label
-    Const PAGE_GAP As Long = 2         ' blank rows between pages on PrintPreview
+    Const HEADER_ROW As Long = 1
+    Const ROWS_PER_PAGE As Long = 12
+    Const PAGE_GAP As Long = 2
 
     Dim wb As Workbook
     Dim wsData As Worksheet
@@ -90,11 +136,29 @@ Public Sub PrintSelectedBoxLabelsPreview()
 
     Dim skuText As String, qtyText As String, lineText As String
 
+    Dim skuCol As Long
+    Dim qtyCol As Long
+    Dim boxCol As Long
+    Dim missingHeaders As String
+
     Set wb = ActiveWorkbook
     Set wsData = ActiveSheet
 
+    skuCol = FindHeaderColumn(wsData, HEADER_ROW, Array("SKU编号"))
+    qtyCol = FindHeaderColumn(wsData, HEADER_ROW, Array("实发数量"))
+    boxCol = FindHeaderColumn(wsData, HEADER_ROW, Array("箱號", "箱号"))
+
+    If skuCol = 0 Then missingHeaders = missingHeaders & vbCrLf & "- SKU编号"
+    If qtyCol = 0 Then missingHeaders = missingHeaders & vbCrLf & "- 实发数量"
+    If boxCol = 0 Then missingHeaders = missingHeaders & vbCrLf & "- 箱號 / 箱号"
+
+    If missingHeaders <> "" Then
+        MsgBox "Required headers were not found on the active sheet:" & vbCrLf & missingHeaders, vbExclamation
+        Exit Sub
+    End If
+
     If TypeName(Selection) <> "Range" Then
-        MsgBox "Please select cells in the 箱號 column.", vbExclamation
+        MsgBox "Please select cells in the 箱號 / 箱号 column.", vbExclamation
         Exit Sub
     End If
 
@@ -108,23 +172,56 @@ Public Sub PrintSelectedBoxLabelsPreview()
     End If
 
     Set selectedBoxes = New Collection
-    lastDataRow = wsData.Cells(wsData.Rows.Count, SKU_COL).End(xlUp).Row
+    lastDataRow = GetMaxLastRow(wsData, skuCol, qtyCol, boxCol)
 
-    ' Read selected box numbers from the selection.
     For Each area In Selection.Areas
         For Each cell In area.Cells
             rowNum = cell.Row
-            If rowNum >= 2 And rowNum <= lastDataRow Then
-                If cell.Column = BOX_COL Then
-                    boxNo = NormalizeBoxNo(wsData.Cells(rowNum, BOX_COL).Value)
+            If rowNum >= HEADER_ROW + 1 And rowNum <= lastDataRow Then
+                If cell.Column = boxCol Then
+                    boxNo = NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value)
                     If boxNo <> "" Then AddUniqueBox selectedBoxes, boxNo
                 End If
             End If
         Next cell
     Next area
 
+    ' Pre-check: 实发数量 非法（<=0 或 非整数）→ stop
+    Dim qtyVal As Variant
+    Dim qtyNum As Double
+    For Each area In Selection.Areas
+        For Each cell In area.Cells
+            rowNum = cell.Row
+            If rowNum >= HEADER_ROW + 1 And rowNum <= lastDataRow Then
+                If cell.Column = boxCol Then
+                    qtyVal = wsData.Cells(rowNum, qtyCol).Value
+                    
+                    ' 必须为数字
+                    If Not IsNumeric(qtyVal) Then
+                        MsgBox "实发数量 非数字（行 " & rowNum & "，箱号 " & wsData.Cells(rowNum, boxCol).Value & "）。请修正后再打印。", vbExclamation
+                        Exit Sub
+                    End If
+                    
+                    qtyNum = CDbl(qtyVal)
+                    
+                    ' <= 0
+                    If qtyNum <= 0 Then
+                        MsgBox "实发数量 <= 0（行 " & rowNum & "，箱号 " & wsData.Cells(rowNum, boxCol).Value & "）。请修正后再打印。", vbExclamation
+                        Exit Sub
+                    End If
+                    
+                    ' 非整数
+                    If qtyNum <> Int(qtyNum) Then
+                        MsgBox "实发数量 不是整数（行 " & rowNum & "，箱号 " & wsData.Cells(rowNum, boxCol).Value & "）。请修正后再打印。", vbExclamation
+                        Exit Sub
+                    End If
+                End If
+            End If
+        Next cell
+    Next area
+
     If selectedBoxes.Count = 0 Then
-        MsgBox "No valid 箱號 were found in your selection. Please select cells in the 箱號 column, excluding blanks and the header.", vbExclamation
+        MsgBox "No valid 箱號 / 箱号 were found in your selection. Please select cells in that column, excluding blanks and the header.", vbExclamation
         Exit Sub
     End If
 
@@ -136,16 +233,15 @@ Public Sub PrintSelectedBoxLabelsPreview()
         Set lineTexts(i) = New Collection
     Next i
 
-    ' Collect all SKU*qty lines for each selected box from the whole active sheet.
-    For rowNum = 2 To lastDataRow
-        boxNo = NormalizeBoxNo(wsData.Cells(rowNum, BOX_COL).Value)
+    For rowNum = HEADER_ROW + 1 To lastDataRow
+        boxNo = NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value)
         If boxNo <> "" Then
             For i = 1 To UBound(boxList)
                 If boxNo = boxList(i) Then
-                    skuText = Trim(CStr(wsData.Cells(rowNum, SKU_COL).Value))
-                    qtyText = Trim(CStr(wsData.Cells(rowNum, QTY_COL).Text))
+                    skuText = Trim(CStr(wsData.Cells(rowNum, skuCol).Value))
+                    qtyText = Trim(CStr(wsData.Cells(rowNum, qtyCol).Text))
                     If skuText <> "" And qtyText <> "" Then
-                        If Val(wsData.Cells(rowNum, QTY_COL).Value) <> 0 Then
+                        If Val(wsData.Cells(rowNum, qtyCol).Value) <> 0 Then
                             lineText = skuText & "  *  " & qtyText
                             lineTexts(i).Add lineText
                         End If
@@ -198,7 +294,6 @@ Public Sub PrintSelectedBoxLabelsPreview()
                     wsLabel.HPageBreaks.Add Before:=wsLabel.Rows(pageTop)
                 End If
 
-                ' Repeat the header on every page, including continuation pages.
                 wsLabel.Range("A" & pageTop).Value = BoxLabel_Text_BoxNo()
                 wsLabel.Range("B" & pageTop).Value = boxList(i)
                 wsLabel.Range("A" & pageTop + 1).Value = BoxLabel_Text_SKUCount()
@@ -275,8 +370,73 @@ Public Sub PrintSelectedBoxLabelsPreview()
     ApplyCJKFont_Box wsLabel
 
     If pageIndex = 0 Then
+        Dim missingInfo As String
+        Dim selectedBoxSummary As String
+        Dim foundIssue As Boolean
+        
+        foundIssue = False
+        missingInfo = ""
+        
+        For i = 1 To UBound(boxList)
+            Dim hasAnyRow As Boolean
+            Dim hasMissingQty As Boolean
+            Dim hasMissingSKU As Boolean
+            Dim hasOnlyZeroQty As Boolean
+            Dim nonZeroQtyFound As Boolean
+            
+            hasAnyRow = False
+            hasMissingQty = False
+            hasMissingSKU = False
+            hasOnlyZeroQty = False
+            nonZeroQtyFound = False
+            
+            For rowNum = HEADER_ROW + 1 To lastDataRow
+                If NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value) = boxList(i) Then
+                    hasAnyRow = True
+                    
+                    If Trim(CStr(wsData.Cells(rowNum, skuCol).Value)) = "" Then
+                        hasMissingSKU = True
+                    End If
+                    
+                    If Trim(CStr(wsData.Cells(rowNum, qtyCol).Value)) = "" Then
+                        hasMissingQty = True
+                    ElseIf Val(wsData.Cells(rowNum, qtyCol).Value) <> 0 Then
+                        nonZeroQtyFound = True
+                    End If
+                End If
+            Next rowNum
+            
+            If hasAnyRow Then
+                If Not nonZeroQtyFound Then
+                    If Not hasMissingQty Then
+                        hasOnlyZeroQty = True
+                    End If
+                End If
+                
+                If hasMissingSKU Or hasMissingQty Or hasOnlyZeroQty Then
+                    foundIssue = True
+                    missingInfo = missingInfo & vbCrLf & "箱號 " & boxList(i) & "："
+                    
+                    If hasMissingSKU Then
+                        missingInfo = missingInfo & vbCrLf & "  - 有行缺少 SKU编号"
+                    End If
+                    If hasMissingQty Then
+                        missingInfo = missingInfo & vbCrLf & "  - 有行缺少 实发数量"
+                    End If
+                    If hasOnlyZeroQty Then
+                        missingInfo = missingInfo & vbCrLf & "  - 所有 实发数量 都为 0"
+                    End If
+                End If
+            End If
+        Next i
+        
         Application.ScreenUpdating = True
-        MsgBox "No valid packed rows were found for the selected 箱號.", vbExclamation
+        
+        If foundIssue Then
+            MsgBox "No valid packed rows were found for the selected 箱號 / 箱号." & vbCrLf & vbCrLf & "Details:" & missingInfo, vbExclamation
+        Else
+            MsgBox "No valid packed rows were found for the selected 箱號 / 箱号.", vbExclamation
+        End If
         Exit Sub
     End If
 
