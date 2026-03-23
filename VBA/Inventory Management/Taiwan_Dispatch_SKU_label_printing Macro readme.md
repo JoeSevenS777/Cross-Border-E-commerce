@@ -10,209 +10,127 @@ Automated per-SKU label printing for Taiwan warehouse operations in Excel.
 ![OUTPUT](https://img.shields.io/badge/OUTPUT-PRINT_PREVIEW-ff8f00?style=for-the-badge)
 ![STATUS](https://img.shields.io/badge/STATUS-STABLE-52c41a?style=for-the-badge)
 
-A VBA macro that prints **one SKU label per page** from the warehouse dispatch sheet.
-
-It is designed for a workflow where:
-
-- warehouse staff prepare SKU-level dispatch data in Excel
-- the user selects SKU rows or SKU cells
-- the macro builds printable labels on a preview sheet
-- each SKU is printed on its own label page
-- the user confirms the layout in **Print Preview** before printing
+A VBA macro that prints **one SKU label per page** from the Taiwan dispatch sheet.
 
 ---
 
-## ✨ Features
+## ✨ Key Updates (Important)
 
-### 1. One SKU = One Label
-
-Each valid selected SKU generates **one separate label page**.
-
-This is suitable for:
-
-- product package labels
-- Taiwan warehouse identification labels
-- receiving and shelving support
-- clerk-friendly SKU recognition
+* ✅ Uses **Sheet1** as the source sheet
+* ✅ Uses **PrintPreview** as the output sheet
+* ✅ Reads columns by **header name (not fixed column letters)**
+* ✅ More robust to future layout changes
 
 ---
 
-### 2. Selection-Aware Workflow
+## 🧾 Required Headers (Sheet1)
 
-The macro supports several selection styles:
+The macro dynamically finds these headers in **Row 1**:
 
-- selected rows
-- selected SKU cells
-- the whole SKU column
+| Header | Description             |
+| ------ | ----------------------- |
+| SKU编号  | SKU identifier          |
+| GTIN   | Barcode number          |
+| 台湾货架位  | Shelf location          |
+| 调拨数量   | Quantity used for label |
 
-It automatically:
-
-- ignores the header row
-- ignores empty cells
-- keeps only valid SKU rows
-
----
-
-### 3. Print Preview First
-
-The macro opens **Print Preview** before printing.
-
-This allows the user to check:
-
-- page layout
-- label spacing
-- font rendering
-- SKU content
-- missing / blank values
-
-before sending labels to the printer.
+> ⚠️ Header names must match exactly.
 
 ---
 
-### 4. Chinese / English Label Support
-
-The printed label supports mixed Chinese and English fields such as:
-
-- 货架位
-- SKU
-- GTIN
-- 数量
-
-Chinese label text is generated safely for Excel/VBA display.
-
----
-
-### 5. Full GTIN Display
-
-The macro forces GTIN to display as full text instead of scientific notation.
-
-For example, it preserves:
-
-```text
-6942265706768
-```
-
-instead of printing:
-
-```text
-6.94227E+12
-```
-
----
-
-### 6. 100mm × 100mm Label Workflow
-
-The macro is designed for square warehouse label paper such as:
-
-```text
-100mm × 100mm
-```
-
-with:
-
-- one label per page
-- clear border layout
-- readable SKU text
-- simple warehouse-facing format
-
----
-
-## Label Content
+## 🏷 Label Content
 
 Each label contains:
 
-- **货架位**
-- **SKU**
-- **GTIN**
-- **数量**
+* 货架位
+* SKU
+* GTIN
+* 数量（来自“调拨数量”）
 
 Example:
 
-```text
-货架位：A-01-04
-SKU：MJ-魔仙-小野猫下睫毛
-GTIN：
-数量：110
+```
+货架位：C-03-05
+SKU：MJ-萌睫尚品-自粘云朵
+GTIN：6942265706768
+数量：10
 ```
 
-If GTIN is empty, it remains blank.
-
 ---
 
-## Expected Source Columns
+## 🔁 Workflow
 
-The macro expects the source worksheet to contain at least these fields:
-
-| Column | Field |
-|---|---|
-| A | SKU编号 |
-| C | 台湾货架位 |
-| F | 数量 |
-| G | GTIN |
-
----
-
-## How It Works
-
-1. Open the workbook that contains the SKU dispatch data.
-2. Go to the worksheet that contains **SKU编号 / 台湾货架位 / 数量 / GTIN**.
+1. Open the workbook
+2. Go to **Sheet1**
 3. Select:
-   - one or more rows, or
-   - one or more SKU cells, or
-   - the whole SKU column.
-4. Run the macro.
-5. The macro builds labels on `PrintPreview`.
-6. It opens **Print Preview**.
+
+   * rows OR
+   * SKU cells OR
+   * full SKU column
+4. Run macro: `PrintSelectedLabelsPreview`
+5. Labels are generated in `PrintPreview`
+6. Excel opens **Print Preview**
 
 ---
 
-## Design Notes
+## ⚙️ Behavior Rules
 
-This macro was built for warehouse label printing where:
+The macro will:
 
-- one product SKU needs one label
-- Taiwan shelf position must be visible
-- some receiving clerks may not know the products well
-- the label must help them identify and shelve correctly
-
-It is optimized for:
-
-- manual operational use
-- SKU-level dispatch labeling
-- warehouse receiving support
-- repeatable label preview before print
+* ignore header row
+* ignore empty SKU rows
+* avoid duplicate row processing
+* preserve GTIN as full text (no scientific notation)
+* generate **1 label = 1 page**
 
 ---
 
-## Recommended Use Case
+## 🖨 Layout
 
-Use this macro when you need to print **per-SKU labels** for:
+Designed for:
 
-- Taiwan warehouse transfer
-- product package identification
-- dispatch preparation
-- receiving and shelving operations
+```
+100mm × 100mm label paper
+```
+
+* clear borders
+* large readable text
+* warehouse-friendly layout
+
+---
+
+## 🧠 Design Logic
+
+This macro is optimized for warehouse operations where:
+
+* each SKU needs its own label
+* shelf location must be visible
+* operators need fast identification
+* printing must be previewed before execution
+
+---
+
+## 🚀 Recommended Use Cases
+
+* Taiwan warehouse transfer
+* SKU-level dispatch labeling
+* product packaging labels
+* receiving & shelving support
+
+---
+
+## 📌 Notes
+
+* Must run macro on **Sheet1**
+* `PrintPreview` sheet must exist
+* Headers must not be renamed
 
 ---
 
 ## Status
 
-**Stable**
+**Stable (Header-driven version)**
 
-The macro supports:
-
-- one-label-per-page output
-- selection-aware behavior
-- Chinese / English labels
-- GTIN full-number display
-- print preview workflow
-
----
-
-## File Purpose
-
-This README documents the logic and usage of:
-
-**Taiwan Label Print Macro**
-
-for SKU-level warehouse label generation in Excel.
+* resilient to column movement
+* selection-aware
+* production-ready for daily warehouse use
