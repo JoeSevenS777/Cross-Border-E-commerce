@@ -10,31 +10,128 @@ Automated per-SKU label printing for Taiwan warehouse operations in Excel.
 ![OUTPUT](https://img.shields.io/badge/OUTPUT-PRINT_PREVIEW-ff8f00?style=for-the-badge)
 ![STATUS](https://img.shields.io/badge/STATUS-STABLE-52c41a?style=for-the-badge)
 
-A VBA macro that prints **one SKU label per page** from the Taiwan dispatch sheet.
+A VBA macro that prints **one SKU label per page** and records printing status to prevent duplicate shipment risk.
 
 ---
 
-## ✨ Key Updates (Important)
+## ✨ Key Features
 
-* ✅ Uses **Sheet1** as the source sheet
-* ✅ Uses **PrintPreview** as the output sheet
-* ✅ Reads columns by **header name (not fixed column letters)**
-* ✅ More robust to future layout changes
+### 1. One SKU = One Label
+
+Each selected SKU generates **one label per page**.
 
 ---
 
-## 🧾 Required Headers (Sheet1)
+### 2. Header-Driven (Robust)
 
-The macro dynamically finds these headers in **Row 1**:
+The macro detects columns by **header names**, not fixed positions.
 
-| Header | Description             |
-| ------ | ----------------------- |
-| SKU编号  | SKU identifier          |
-| GTIN   | Barcode number          |
-| 台湾货架位  | Shelf location          |
-| 调拨数量   | Quantity used for label |
+Required headers:
 
-> ⚠️ Header names must match exactly.
+| Header |
+| ------ |
+| SKU编号  |
+| GTIN   |
+| 台湾货架位  |
+| 调拨数量   |
+| 标签打印状态 |
+
+---
+
+### 3. Duplicate Print Prevention (Core Feature)
+
+Before printing, the macro checks:
+
+* if any selected rows are already marked as printed
+
+If found, it shows:
+
+```
+行 3,4,5 已打印，请确认是否继续打印？
+```
+
+* Yes → continue
+* No → stop
+
+---
+
+### 4. Print Confirmation Control
+
+After closing Print Preview, the macro asks:
+
+```
+请确认：以上标签是否已经成功打印？
+点击“是”将标记为“已打印”。
+```
+
+If **Yes**:
+
+* writes timestamp into `标签打印状态`
+
+Format:
+
+```
+mm/dd_hh:mm已打印
+```
+
+Example:
+
+```
+03/06_12:11已打印
+```
+
+If **No**:
+
+* no changes are made
+
+---
+
+### 5. Conditional Formatting Recommended
+
+Color highlighting is NOT handled by VBA.
+
+Instead, use Excel **Conditional Formatting**:
+
+Example formula:
+
+```
+=ISNUMBER(SEARCH("已打印", $J2))
+```
+
+(Replace `J` with your 标签打印状态 column)
+
+Benefits:
+
+* automatically reversible
+* no hard formatting
+* consistent visual control
+
+---
+
+### 6. Selection-Aware Workflow
+
+Supports:
+
+* selecting rows
+* selecting SKU cells
+* selecting ranges
+
+Automatically:
+
+* ignores header row
+* ignores empty SKU
+* avoids duplicate row processing
+
+---
+
+### 7. Print Preview First
+
+Workflow:
+
+1. generate labels
+2. open Print Preview
+3. user prints or checks
+4. confirmation step updates status
 
 ---
 
@@ -45,92 +142,45 @@ Each label contains:
 * 货架位
 * SKU
 * GTIN
-* 数量（来自“调拨数量”）
-
-Example:
-
-```
-货架位：C-03-05
-SKU：MJ-萌睫尚品-自粘云朵
-GTIN：6942265706768
-数量：10
-```
+* 数量
 
 ---
 
-## 🔁 Workflow
+## ⚙️ Workflow Summary
 
-1. Open the workbook
-2. Go to **Sheet1**
-3. Select:
-
-   * rows OR
-   * SKU cells OR
-   * full SKU column
-4. Run macro: `PrintSelectedLabelsPreview`
-5. Labels are generated in `PrintPreview`
-6. Excel opens **Print Preview**
+1. Go to **Sheet1**
+2. Select SKU rows/cells
+3. Run macro `PrintSelectedLabelsPreview`
+4. Preview opens
+5. Print if needed
+6. Confirm → mark as printed
 
 ---
 
-## ⚙️ Behavior Rules
+## 🧠 Control Design
 
-The macro will:
+This macro adds **operational control**:
 
-* ignore header row
-* ignore empty SKU rows
-* avoid duplicate row processing
-* preserve GTIN as full text (no scientific notation)
-* generate **1 label = 1 page**
+* prevents accidental duplicate printing
+* adds traceability via timestamp
+* enforces human confirmation step
 
 ---
 
-## 🖨 Layout
-
-Designed for:
-
-```
-100mm × 100mm label paper
-```
-
-* clear borders
-* large readable text
-* warehouse-friendly layout
-
----
-
-## 🧠 Design Logic
-
-This macro is optimized for warehouse operations where:
-
-* each SKU needs its own label
-* shelf location must be visible
-* operators need fast identification
-* printing must be previewed before execution
-
----
-
-## 🚀 Recommended Use Cases
+## 🚀 Use Cases
 
 * Taiwan warehouse transfer
-* SKU-level dispatch labeling
-* product packaging labels
-* receiving & shelving support
-
----
-
-## 📌 Notes
-
-* Must run macro on **Sheet1**
-* `PrintPreview` sheet must exist
-* Headers must not be renamed
+* SKU labeling
+* dispatch preparation
+* receiving & shelving
 
 ---
 
 ## Status
 
-**Stable (Header-driven version)**
+**Stable (Control-enabled version)**
 
-* resilient to column movement
-* selection-aware
-* production-ready for daily warehouse use
+* header-driven
+* duplicate warning
+* print confirmation
+* timestamp tracking
