@@ -8,10 +8,6 @@ Private Function BoxLabel_Text_SKUCount() As String
     BoxLabel_Text_SKUCount = "SKU" & ChrW(&H6578) & ChrW(&HFF1A)
 End Function
 
-Private Function BoxLabel_Text_DetailHeader() As String
-    BoxLabel_Text_DetailHeader = "SKU" & ChrW(&H660E) & ChrW(&H7D30) & "*" & ChrW(&H6578) & ChrW(&H91CF) & ChrW(&HFF1A)
-End Function
-
 Private Function BoxLabel_Text_DetailHeader_Short() As String
     BoxLabel_Text_DetailHeader_Short = ChrW(&H660E) & ChrW(&H7D30) & "SKU * " & ChrW(&H6578) & ChrW(&H91CF) & ChrW(&HFF1A)
 End Function
@@ -37,14 +33,18 @@ End Sub
 Private Function NormalizeBoxNo(ByVal v As Variant) As String
     Dim s As String
 
-    s = Trim(CStr(v))
+    s = Trim$(CStr(v))
     If s = "" Then
         NormalizeBoxNo = ""
         Exit Function
     End If
 
     If IsNumeric(s) Then
-        NormalizeBoxNo = Format$(CLng(Val(s)), "00")
+        If CDbl(s) <> Int(CDbl(s)) Then
+            NormalizeBoxNo = s
+        Else
+            NormalizeBoxNo = Format$(CLng(Val(s)), "00")
+        End If
     Else
         NormalizeBoxNo = s
     End If
@@ -110,7 +110,6 @@ Private Function GetMaxLastRow(ByVal ws As Worksheet, ParamArray cols() As Varia
 End Function
 
 Public Sub PrintSelectedBoxLabelsPreview()
-
     Const HEADER_ROW As Long = 1
     Const ROWS_PER_PAGE As Long = 12
     Const PAGE_GAP As Long = 2
@@ -120,26 +119,37 @@ Public Sub PrintSelectedBoxLabelsPreview()
     Dim wsLabel As Worksheet
 
     Dim selectedBoxes As Collection
-    Dim area As Range, cell As Range
-    Dim lastDataRow As Long, rowNum As Long
-    Dim boxNo As String
-
-    Dim boxList() As String
-    Dim lineTexts() As Collection
-    Dim pageIndex As Long
-    Dim i As Long, j As Long
-    Dim lineCount As Long
-
-    Dim pageTop As Long, lineRow As Long
-    Dim totalLastRow As Long
+    Dim area As Range
+    Dim cell As Range
     Dim c As Collection
 
-    Dim skuText As String, qtyText As String, lineText As String
+    Dim lastDataRow As Long
+    Dim rowNum As Long
+    Dim pageIndex As Long
+    Dim pageTop As Long
+    Dim lineRow As Long
+    Dim totalLastRow As Long
+    Dim lineCount As Long
+
+    Dim i As Long
+    Dim j As Long
+
+    Dim boxNo As String
+    Dim skuText As String
+    Dim qtyText As String
+    Dim lineText As String
+    Dim missingHeaders As String
 
     Dim skuCol As Long
     Dim qtyCol As Long
     Dim boxCol As Long
-    Dim missingHeaders As String
+
+    Dim boxList() As String
+    Dim lineTexts() As Collection
+
+    Dim qtyVal As Variant
+    Dim qtyNum As Double
+    Dim skuVal As String
 
     Set wb = ActiveWorkbook
     Set wsData = ActiveSheet
@@ -174,46 +184,16 @@ Public Sub PrintSelectedBoxLabelsPreview()
     Set selectedBoxes = New Collection
     lastDataRow = GetMaxLastRow(wsData, skuCol, qtyCol, boxCol)
 
+    ' Build selected box list from selected non-blank box cells only.
+    ' This makes full-column selection behave like selecting all valid non-empty box cells.
     For Each area In Selection.Areas
         For Each cell In area.Cells
             rowNum = cell.Row
             If rowNum >= HEADER_ROW + 1 And rowNum <= lastDataRow Then
                 If cell.Column = boxCol Then
                     boxNo = NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value)
-                    If boxNo <> "" Then AddUniqueBox selectedBoxes, boxNo
-                End If
-            End If
-        Next cell
-    Next area
-
-    ' Pre-check: 实发数量 非法（<=0 或 非整数）→ stop
-    Dim qtyVal As Variant
-    Dim qtyNum As Double
-    For Each area In Selection.Areas
-        For Each cell In area.Cells
-            rowNum = cell.Row
-            If rowNum >= HEADER_ROW + 1 And rowNum <= lastDataRow Then
-                If cell.Column = boxCol Then
-                    qtyVal = wsData.Cells(rowNum, qtyCol).Value
-                    
-                    ' 必须为数字
-                    If Not IsNumeric(qtyVal) Then
-                        MsgBox "实发数量 非数字（行 " & rowNum & "，箱号 " & wsData.Cells(rowNum, boxCol).Value & "）。请修正后再打印。", vbExclamation
-                        Exit Sub
-                    End If
-                    
-                    qtyNum = CDbl(qtyVal)
-                    
-                    ' <= 0
-                    If qtyNum <= 0 Then
-                        MsgBox "实发数量 <= 0（行 " & rowNum & "，箱号 " & wsData.Cells(rowNum, boxCol).Value & "）。请修正后再打印。", vbExclamation
-                        Exit Sub
-                    End If
-                    
-                    ' 非整数
-                    If qtyNum <> Int(qtyNum) Then
-                        MsgBox "实发数量 不是整数（行 " & rowNum & "，箱号 " & wsData.Cells(rowNum, boxCol).Value & "）。请修正后再打印。", vbExclamation
-                        Exit Sub
+                    If boxNo <> "" Then
+                        AddUniqueBox selectedBoxes, boxNo
                     End If
                 End If
             End If
@@ -221,9 +201,54 @@ Public Sub PrintSelectedBoxLabelsPreview()
     Next area
 
     If selectedBoxes.Count = 0 Then
-        MsgBox "No valid 箱號 / 箱号 were found in your selection. Please select cells in that column, excluding blanks and the header.", vbExclamation
+        MsgBox "No valid non-empty 箱號 / 箱号 were found in your selection.", vbExclamation
         Exit Sub
     End If
+
+    ' Strict validation for selected non-blank box rows only.
+    ' Blank box cells are ignored, but any strange real data should stop the process.
+    For Each area In Selection.Areas
+        For Each cell In area.Cells
+            rowNum = cell.Row
+            If rowNum >= HEADER_ROW + 1 And rowNum <= lastDataRow Then
+                If cell.Column = boxCol Then
+                    boxNo = NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value)
+
+                    If boxNo <> "" Then
+                        skuVal = Trim$(CStr(wsData.Cells(rowNum, skuCol).Value))
+                        qtyVal = wsData.Cells(rowNum, qtyCol).Value
+
+                        If skuVal = "" Then
+                            MsgBox "SKU编号 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
+                            Exit Sub
+                        End If
+
+                        If Trim$(CStr(qtyVal)) = "" Then
+                            MsgBox "实发数量 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
+                            Exit Sub
+                        End If
+
+                        If Not IsNumeric(qtyVal) Then
+                            MsgBox "实发数量 非数字（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
+                            Exit Sub
+                        End If
+
+                        qtyNum = CDbl(qtyVal)
+
+                        If qtyNum <= 0 Then
+                            MsgBox "实发数量 <= 0（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
+                            Exit Sub
+                        End If
+
+                        If qtyNum <> Int(qtyNum) Then
+                            MsgBox "实发数量 不是整数（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
+                            Exit Sub
+                        End If
+                    End If
+                End If
+            End If
+        Next cell
+    Next area
 
     ReDim boxList(1 To selectedBoxes.Count)
     ReDim lineTexts(1 To selectedBoxes.Count)
@@ -238,12 +263,15 @@ Public Sub PrintSelectedBoxLabelsPreview()
         If boxNo <> "" Then
             For i = 1 To UBound(boxList)
                 If boxNo = boxList(i) Then
-                    skuText = Trim(CStr(wsData.Cells(rowNum, skuCol).Value))
-                    qtyText = Trim(CStr(wsData.Cells(rowNum, qtyCol).Text))
+                    skuText = Trim$(CStr(wsData.Cells(rowNum, skuCol).Value))
+                    qtyText = Trim$(CStr(wsData.Cells(rowNum, qtyCol).Value))
+
                     If skuText <> "" And qtyText <> "" Then
-                        If Val(wsData.Cells(rowNum, qtyCol).Value) <> 0 Then
-                            lineText = skuText & "  *  " & qtyText
-                            lineTexts(i).Add lineText
+                        If IsNumeric(qtyText) Then
+                            If CDbl(qtyText) > 0 And CDbl(qtyText) = Int(CDbl(qtyText)) Then
+                                lineText = skuText & "  *  " & qtyText
+                                lineTexts(i).Add lineText
+                            End If
                         End If
                     End If
                     Exit For
@@ -313,6 +341,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
                 wsLabel.Rows(pageTop).RowHeight = 24
                 wsLabel.Rows(pageTop + 1).RowHeight = 24
                 wsLabel.Rows(pageTop + 2).RowHeight = 22
+
                 With wsLabel.Range("A" & pageTop + 2 & ":B" & pageTop + 2)
                     .Borders.LineStyle = xlContinuous
                     .Borders.Weight = xlThin
@@ -328,6 +357,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
                     wsLabel.Range("A" & lineRow & ":B" & lineRow).UnMerge
                     wsLabel.Range("A" & lineRow & ":B" & lineRow).Merge
                     wsLabel.Range("A" & lineRow).Value = CStr(c(j))
+
                     With wsLabel.Range("A" & lineRow & ":B" & lineRow)
                         .Borders.LineStyle = xlContinuous
                         .Borders.Weight = xlThin
@@ -336,8 +366,8 @@ Public Sub PrintSelectedBoxLabelsPreview()
                         .WrapText = True
                         .Font.Size = 12
                     End With
-                    wsLabel.Rows(lineRow).RowHeight = 20
 
+                    wsLabel.Rows(lineRow).RowHeight = 20
                     lineRow = lineRow + 1
                     lineCount = lineCount + 1
                     j = j + 1
@@ -370,73 +400,8 @@ Public Sub PrintSelectedBoxLabelsPreview()
     ApplyCJKFont_Box wsLabel
 
     If pageIndex = 0 Then
-        Dim missingInfo As String
-        Dim selectedBoxSummary As String
-        Dim foundIssue As Boolean
-        
-        foundIssue = False
-        missingInfo = ""
-        
-        For i = 1 To UBound(boxList)
-            Dim hasAnyRow As Boolean
-            Dim hasMissingQty As Boolean
-            Dim hasMissingSKU As Boolean
-            Dim hasOnlyZeroQty As Boolean
-            Dim nonZeroQtyFound As Boolean
-            
-            hasAnyRow = False
-            hasMissingQty = False
-            hasMissingSKU = False
-            hasOnlyZeroQty = False
-            nonZeroQtyFound = False
-            
-            For rowNum = HEADER_ROW + 1 To lastDataRow
-                If NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value) = boxList(i) Then
-                    hasAnyRow = True
-                    
-                    If Trim(CStr(wsData.Cells(rowNum, skuCol).Value)) = "" Then
-                        hasMissingSKU = True
-                    End If
-                    
-                    If Trim(CStr(wsData.Cells(rowNum, qtyCol).Value)) = "" Then
-                        hasMissingQty = True
-                    ElseIf Val(wsData.Cells(rowNum, qtyCol).Value) <> 0 Then
-                        nonZeroQtyFound = True
-                    End If
-                End If
-            Next rowNum
-            
-            If hasAnyRow Then
-                If Not nonZeroQtyFound Then
-                    If Not hasMissingQty Then
-                        hasOnlyZeroQty = True
-                    End If
-                End If
-                
-                If hasMissingSKU Or hasMissingQty Or hasOnlyZeroQty Then
-                    foundIssue = True
-                    missingInfo = missingInfo & vbCrLf & "箱號 " & boxList(i) & "："
-                    
-                    If hasMissingSKU Then
-                        missingInfo = missingInfo & vbCrLf & "  - 有行缺少 SKU编号"
-                    End If
-                    If hasMissingQty Then
-                        missingInfo = missingInfo & vbCrLf & "  - 有行缺少 实发数量"
-                    End If
-                    If hasOnlyZeroQty Then
-                        missingInfo = missingInfo & vbCrLf & "  - 所有 实发数量 都为 0"
-                    End If
-                End If
-            End If
-        Next i
-        
         Application.ScreenUpdating = True
-        
-        If foundIssue Then
-            MsgBox "No valid packed rows were found for the selected 箱號 / 箱号." & vbCrLf & vbCrLf & "Details:" & missingInfo, vbExclamation
-        Else
-            MsgBox "No valid packed rows were found for the selected 箱號 / 箱号.", vbExclamation
-        End If
+        MsgBox "No valid packed rows were found for the selected 箱號 / 箱号.", vbExclamation
         Exit Sub
     End If
 
@@ -444,6 +409,4 @@ Public Sub PrintSelectedBoxLabelsPreview()
 
     Application.ScreenUpdating = True
     wsLabel.PrintPreview
-
 End Sub
-
