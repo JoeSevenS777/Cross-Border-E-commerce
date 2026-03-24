@@ -1,150 +1,192 @@
-# 采购单 & BigSeller采购导入 自动化 (VBA)
+# Joe77 Procurement & BigSeller Import Automation (VBA)
 
 [![Status](https://img.shields.io/badge/status-stable-brightgreen)]()
-[![Excel](https://img.shields.io/badge/Excel-VBA-blue)]()
+[![Excel Version](https://img.shields.io/badge/Excel-VBA-blue)]()
 [![Version](https://img.shields.io/badge/version-2026_update-orange)]()
 [![License](https://img.shields.io/badge/license-private-lightgrey)]()
 
-------------------------------------------------------------------------
+---
 
 ## Overview
+This VBA macro exports purchase data from four sheets:
 
-该 VBA 自动化脚本用于从以下工作表导出 **采购数据**：
+- Mengjie (萌睫)
+- Caijing (采菁)
+- Flortte
+- Jiazi (夹子)
 
--   萌睫\
--   采菁\
--   Flortte\
--   夹子
+It generates two types of files:
 
-并生成：
+- **Joe77 Procurement File**
+- **BigSeller Import File**
 
--   **Joe77采购单**
--   **Bigseller采购导入文件**
+The script processes rows where the `action` column indicates a purchase requirement.
 
-系统基于 `action` 列自动识别需要采购的数据行，并完成标准化输出。
+---
 
-------------------------------------------------------------------------
+## Core Workflow (Original Logic Preserved)
 
-## 🚀 Key Updates（2026）
-
-### 1. Action识别逻辑（增强）
-
-支持以下所有形式：
-
--   Place Order
--   Place Order - Network
--   Place Order - Default
-
-规则：
-
-> **只要包含 "place order" 即视为有效**
-
-------------------------------------------------------------------------
-
-### 2. 采菁输出逻辑（已统一）
-
-  项目               旧逻辑     新逻辑
-  ------------------ ---------- ---------------------------
-  Joe77采购单_采菁   独立结构   ✅ 与萌睫完全一致
-  输出字段           多列       商品链接 / 属性SKU / 数量
-
-------------------------------------------------------------------------
-
-### 3. 保存路径统一（重要）
-
-所有店铺现在统一为：
-
-    ThisWorkbook.Path
-
-  店铺      Joe77路径             Bigseller路径
-  --------- --------------------- ---------------
-  萌睫      同目录                同目录
-  采菁      ✅ 同目录（已修正）   同目录
-  Flortte   同目录                同目录
-  夹子      同目录                同目录
-
-------------------------------------------------------------------------
-
-## 📦 输出文件
-
-  店铺      Joe77采购单                 Bigseller导入
-  --------- --------------------------- ---------------
-  萌睫      商品链接 / 属性SKU / 数量   标准18列
-  采菁      ✅ 同萌睫                   标准18列
-  Flortte   SKU / 数量（去前缀）        标准18列
-  夹子      SKU / 数量（去前缀）        标准18列
-
-------------------------------------------------------------------------
-
-## 🔧 特殊规则
-
-### Flortte / 夹子
-
-自动去除前缀（不区分大小写）：
-
--   MJ-Flortte-
--   MJ-夹子-
--   MJ-JiaZi-
-
-------------------------------------------------------------------------
-
-## 🧠 核心逻辑
-
-### 1. 行筛选
-
-    CountPlaceOrder(ws)
-
-### 2. 动态表头识别
-
-    FindHeaderCol(ws, "action")
-
-### 3. 文件处理
-
-    EnsureTodayFile(...)
-
-### 4. 数据导出
-
-    Export_Mengjie_Joe77
-    Export_2Col_Joe77_SkuQty
-    Export_ImportFile
-
-------------------------------------------------------------------------
-
-## 🧩 使用步骤
-
-1.  打开 `.xlsm` 文件\
-2.  进入任一工作表（萌睫 / 采菁 / Flortte / 夹子）\
-3.  确保 `action` 列包含 "place order"\
-4.  运行宏：
-
-```{=html}
-<!-- -->
+### 1. Entry Point
 ```
-    Joe采购单_Bigseller采购导入
+Joe采购单_Bigseller采购导入
+```
 
-5.  选择是否打开生成文件
+- Validates workbook
+- Validates active sheet
+- Disables Excel performance settings
+- Routes logic by sheet name
 
-------------------------------------------------------------------------
+---
 
-## ⚠️ 注意事项
+### 2. Sheet Routing
 
--   工作簿必须已保存
--   必须包含字段：
-    -   action
-    -   SKU / 属性SKU / 商品链接 / 数量
--   仅支持4个指定工作表
+| Sheet | Handler |
+|------|--------|
+| 萌睫 | Handle_MengJie |
+| 采菁 | Handle_CaiJing |
+| Flortte | Handle_Flortte |
+| 夹子 | Handle_JiaZi |
 
-------------------------------------------------------------------------
+---
 
-## 🎯 设计原则
+### 3. Row Filtering Logic
 
--   **统一结构** → 降低复杂度\
--   **宽松匹配** → 适应业务变化\
--   **去路径依赖** → 提高稳定性\
--   **可复用文件** → 避免重复创建
+```
+IsPlaceOrderAction(action)
+```
 
-------------------------------------------------------------------------
+Rule:
+
+> Any value containing **"place order"** (case-insensitive) is valid
+
+Examples:
+- Place Order
+- Place Order - Network
+- Place Order - Default
+
+---
+
+### 4. File Naming
+
+```
+<prefix> + yyyymmdd + .xlsx
+```
+
+Examples:
+- Joe77采购单_萌睫20260324.xlsx
+- Bigseller采购导入_采菁20260324.xlsx
+
+---
+
+### 5. File Handling
+
+```
+EnsureTodayFile(folder, prefix, todayFile)
+```
+
+- If today's file exists → reuse
+- If old file exists → rename to today
+- Prevents duplication
+
+---
+
+## Output Logic by Sheet
+
+### 1. Mengjie & Caijing (Unified)
+
+**Joe77 Output:**
+
+| Column | Field |
+|-------|------|
+| A | 商品链接 (Product Link) |
+| B | 属性SKU (Attribute SKU) |
+| C | 数量 (Quantity) |
+
+**Logic:**
+```
+Export_Mengjie_Joe77
+```
+
+---
+
+### 2. Flortte
+
+**Joe77 Output:**
+
+| Column | Field |
+|-------|------|
+| A | SKU |
+| B | 数量 |
+
+**Special Rule:**
+- Remove prefix: `MJ-Flortte-`
+
+---
+
+### 3. Jiazi
+
+Same structure as Flortte
+
+**Prefixes removed:**
+- MJ-夹子-
+- MJ-JiaZi-
+
+---
+
+### 4. BigSeller Import (All Sheets)
+
+```
+Export_ImportFile
+```
+
+- Fixed **18-column template**
+- Only fills:
+  - SKU Name
+  - Purchase Qty
+
+---
+
+## File Save Location (Updated)
+
+All outputs are saved to:
+
+```
+ThisWorkbook.Path
+```
+
+✔ No external dependency
+✔ Consistent across all sheets
+
+---
+
+## Automation Behavior
+
+- Clears old data but keeps headers
+- Reuses existing files
+- Suppresses Excel alerts
+- Auto-fit columns
+- Prompts user to open files after execution
+
+---
+
+## Requirements
+
+- Workbook must be saved
+- Required headers:
+  - action
+  - SKU / 属性SKU / 商品链接 / 数量
+- Only works on 4 specific sheets
+
+---
+
+## Design Principles
+
+- **Consistency** → unified output format
+- **Flexibility** → fuzzy action matching
+- **Stability** → no hardcoded paths
+- **Efficiency** → reuse existing files
+
+---
 
 ## License
-
 Private internal automation. Not for redistribution.
