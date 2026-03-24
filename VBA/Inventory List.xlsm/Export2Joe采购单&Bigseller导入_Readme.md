@@ -1,187 +1,150 @@
-# Joe77 Procurement & BigSeller Import Automation (VBA)
+# 采购单 & BigSeller采购导入 自动化 (VBA)
 
-[![Status](https://img.shields.io/badge/status-stable-brightgreen)]( )
-[![Excel Version](https://img.shields.io/badge/Excel-VBA-blue)]( )
-[![License](https://img.shields.io/badge/license-private-lightgrey)]( )
+[![Status](https://img.shields.io/badge/status-stable-brightgreen)]()
+[![Excel](https://img.shields.io/badge/Excel-VBA-blue)]()
+[![Version](https://img.shields.io/badge/version-2026_update-orange)]()
+[![License](https://img.shields.io/badge/license-private-lightgrey)]()
+
+------------------------------------------------------------------------
 
 ## Overview
-This VBA automation streamlines the workflow for generating **Joe77 采购单** and **BigSeller 采购导入** files from three product sheets:
 
-- 萌睫  
-- 采菁  
-- Flortte
-- 夹子
+该 VBA 自动化脚本用于从以下工作表导出 **采购数据**：
 
-Based on rows marked **"place order"**, the macro exports cleaned, standardized procurement files used for:
+-   萌睫\
+-   采菁\
+-   Flortte\
+-   夹子
 
-- Internal supplier ordering (Joe77采购单)
-- BigSeller purchase import templates (Bigseller采购导入)
+并生成：
 
-The macro automatically:
-- Detects required columns
-- Reuses existing files if present
-- Renames older files to today's date
-- Generates new files when needed
-- Saves and closes export files
-- Prompts whether to open the results
+-   **Joe77采购单**
+-   **Bigseller采购导入文件**
 
----
+系统基于 `action` 列自动识别需要采购的数据行，并完成标准化输出。
 
-## Features
+------------------------------------------------------------------------
 
-### Automated File Generation
+## 🚀 Key Updates（2026）
 
-| Source Sheet | Output 1 (Internal) | Output 2 (BigSeller) | Save Location |
-|--------------|--------------------|----------------------|---------------|
-| 萌睫 | Joe77采购单_萌睫YYYYMMDD.xlsx | Bigseller采购导入_萌睫YYYYMMDD.xlsx | Same folder as .xlsm |
-| 采菁 | Joe77采购单_采菁YYYYMMDD.xlsx | Bigseller采购导入_采菁YYYYMMDD.xlsx | Joe77 → Batch_added_to_cart; BigSeller → same folder as .xlsm |
-| Flortte | Joe77采购单_FlortteYYYYMMDD.xlsx | Bigseller采购导入_FlortteYYYYMMDD.xlsx | Same folder as .xlsm |
+### 1. Action识别逻辑（增强）
 
----
+支持以下所有形式：
 
-### Intelligent Header Detection
-The script does not rely on fixed column positions.  
-It detects headers dynamically using:
+-   Place Order
+-   Place Order - Network
+-   Place Order - Default
 
-    FindHeaderCol(ws, "headerName")
+规则：
 
----
+> **只要包含 "place order" 即视为有效**
 
-### Output Safety
-- Automatically renames older files to today's date
-- Avoids overwriting unless intended
-- Prevents Excel “Save changes?” pop-ups
-- Cleans and rewrites only data rows, not headers
+------------------------------------------------------------------------
 
----
+### 2. 采菁输出逻辑（已统一）
 
-### User-Friendly Interaction
-At the end of execution:
+  项目               旧逻辑     新逻辑
+  ------------------ ---------- ---------------------------
+  Joe77采购单_采菁   独立结构   ✅ 与萌睫完全一致
+  输出字段           多列       商品链接 / 属性SKU / 数量
 
-- Shows a **Yes / No** dialog asking whether to open the generated files
-- If Yes → both files open automatically
-- If No → macro exits silently
+------------------------------------------------------------------------
 
----
+### 3. 保存路径统一（重要）
 
-## Flortte Special Rules (Important)
+所有店铺现在统一为：
 
-For sheet **Flortte**, the Joe77 procurement file follows a simplified structure:
+    ThisWorkbook.Path
 
-- Output columns: **SKU**, **数量** only
-- During export, SKU values automatically remove the prefix:
+  店铺      Joe77路径             Bigseller路径
+  --------- --------------------- ---------------
+  萌睫      同目录                同目录
+  采菁      ✅ 同目录（已修正）   同目录
+  Flortte   同目录                同目录
+  夹子      同目录                同目录
 
-    MJ-Flortte-   (case-insensitive)
+------------------------------------------------------------------------
 
-Example:
+## 📦 输出文件
 
-    MJ-Flortte-ABC123  →  ABC123
+  店铺      Joe77采购单                 Bigseller导入
+  --------- --------------------------- ---------------
+  萌睫      商品链接 / 属性SKU / 数量   标准18列
+  采菁      ✅ 同萌睫                   标准18列
+  Flortte   SKU / 数量（去前缀）        标准18列
+  夹子      SKU / 数量（去前缀）        标准18列
 
-This cleanup applies **only** to the **Joe77采购单_Flortte** file.  
-The BigSeller import file follows the standard logic.
+------------------------------------------------------------------------
 
----
+## 🔧 特殊规则
 
-## Requirements
+### Flortte / 夹子
 
-- Windows + Excel with VBA enabled
-- Workbook must be saved before running (required for file path resolution)
-- Sheets must be named **萌睫**, **采菁**, or **Flortte**
+自动去除前缀（不区分大小写）：
 
----
+-   MJ-Flortte-
+-   MJ-夹子-
+-   MJ-JiaZi-
 
-## How to Use
+------------------------------------------------------------------------
 
-1. Open the `.xlsm` containing this macro.
-2. Go to sheet **萌睫**, **采菁**, or **Flortte**.
-3. Ensure the *action* column contains `"place order"` on relevant rows.
-4. Run macro:
+## 🧠 核心逻辑
 
-    Joe采购单_Bigseller采购导入
-
-5. After processing, choose whether to open the output files.
-
----
-
-## Directory Structure Example
-
-    automation/
-        Joe采购单_Bigseller采购导入.xlsm
-        Bigseller采购导入_萌睫20251212.xlsx
-        Bigseller采购导入_采菁20251212.xlsx
-        Bigseller采购导入_Flortte20251212.xlsx
-        Batch_added_to_cart/
-            Joe77采购单_采菁20251212.xlsx
-        Joe77采购单_Flortte20251212.xlsx
-
----
-
-## Core Logic Summary
-
-### 1. Count rows that require export
+### 1. 行筛选
 
     CountPlaceOrder(ws)
 
-### 2. Identify necessary headers
+### 2. 动态表头识别
 
-    FindHeaderCol ws, "SKU"
-    FindHeaderCol ws, "数量"
-    FindHeaderCol ws, "action"
+    FindHeaderCol(ws, "action")
 
-### 3. Build file paths and standardized names
+### 3. 文件处理
 
-    prefix + Format(Date, "yyyymmdd") + ".xlsx"
+    EnsureTodayFile(...)
 
-### 4. Reuse or rename existing files
-
-    EnsureTodayFile folder, prefix, todayFilename
-
-### 5. Export content
+### 4. 数据导出
 
     Export_Mengjie_Joe77
-    Export_Caijing_Joe77
-    Export_Flortte_Joe77   ' SKU / 数量 only, strips MJ-Flortte- prefix
+    Export_2Col_Joe77_SkuQty
     Export_ImportFile
 
-### 6. Ask user whether to open files
+------------------------------------------------------------------------
 
-    MsgBox "是否打开文件？", vbYesNo
+## 🧩 使用步骤
 
----
+1.  打开 `.xlsm` 文件\
+2.  进入任一工作表（萌睫 / 采菁 / Flortte / 夹子）\
+3.  确保 `action` 列包含 "place order"\
+4.  运行宏：
 
-## Example Code Snippet
+```{=html}
+<!-- -->
+```
+    Joe采购单_Bigseller采购导入
 
-    oldAlerts = Application.DisplayAlerts
-    Application.DisplayAlerts = False
-    wb.SaveAs fileName:=filePath, FileFormat:=xlOpenXMLWorkbook
-    wb.Close SaveChanges:=False
-    Application.DisplayAlerts = oldAlerts
+5.  选择是否打开生成文件
 
----
+------------------------------------------------------------------------
 
-## Troubleshooting
+## ⚠️ 注意事项
 
-| Issue | Cause | Solution |
-|------|------|----------|
-| File could not be accessed | Excel temporarily locks file | Ensure no export files are open |
-| Sub or Function not defined | Module incomplete | Ensure full script is in one module |
-| No files generated | No "place order" rows | Check action column spelling |
+-   工作簿必须已保存
+-   必须包含字段：
+    -   action
+    -   SKU / 属性SKU / 商品链接 / 数量
+-   仅支持4个指定工作表
 
----
+------------------------------------------------------------------------
 
-## Why This Script Exists
-Managing procurement files manually across multiple brand formats was repetitive and error-prone.  
-This automation removes every manual step:
+## 🎯 设计原则
 
-- No copying/pasting  
-- No formatting  
-- No filename guessing  
-- No dialog prompts  
-- No forgotten old files  
+-   **统一结构** → 降低复杂度\
+-   **宽松匹配** → 适应业务变化\
+-   **去路径依赖** → 提高稳定性\
+-   **可复用文件** → 避免重复创建
 
-It enforces a procurement workflow that is consistent, predictable, and fast.
-
----
+------------------------------------------------------------------------
 
 ## License
-This script is part of a private business automation system and is **not permitted for redistribution**.
+
+Private internal automation. Not for redistribution.
