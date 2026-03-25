@@ -9,13 +9,29 @@
 
 ## Overview
 
-This document explains the **logic and maintenance rules** for three key formulas:
+This README documents the inventory-formula framework used to control replenishment decisions for SKUs stored in **Taiwan Warehouse** and **Default Warehouse**.
 
-* **ROP (Reorder Point)**
-* **Action**
-* **PO Quantity**
+It focuses on four linked parts:
 
-It is designed as a quick reference to help recall the logic later.
+* **ROP** → when the network should reorder
+* **Action** → whether the shortage is network-level or Default-only
+* **PO Quantity** → how much to order after packaging rules are applied
+* **σD** → how demand-variability level is assigned from daily sales
+
+In short:
+
+```text
+ROP defines WHEN to order,
+Action defines WHY to order,
+PO Quantity defines HOW MUCH to order,
+σD adjusts the demand buffer.
+```
+
+This file is mainly for **future maintenance and recall**. When formulas need to be reviewed later, this README should make it easy to remember:
+
+* what each formula is for
+* which parameters can be changed safely
+* which logic should stay stable
 
 ---
 
@@ -49,7 +65,7 @@ It is designed as a quick reference to help recall the logic later.
     r,ROW(A2),
     otherSales,IFERROR(INDEX(FILTER($I$1:$I$147,($A$1:$A$147=sku)*(ROW($A$1:$A$147)<>r)),1),0),
     otherP,IFERROR(INDEX(FILTER($P$1:$P$147,($A$1:$A$147=sku)*(ROW($A$1:$A$147)<>r)),1),0),
-    otherQ,IFERROR(INDEX(FILTER($Q$1:$Q$147,($A$1:$A$147=sku)*(ROW($A$1:$A$147=sku)*(ROW($A$1:$A$147)<>r)),1),0),
+    otherQ,IFERROR(INDEX(FILTER($Q$1:$Q$147,($A$1:$A$147=sku)*(ROW($A$1:$A$147)<>r)),1),0),
     otherSafety,IFERROR(INDEX(FILTER($O$1:$O$147,($A$1:$A$147=sku)*(ROW($A$1:$A$147)<>r)),1),0),
     (Q2+P2)*I2 + otherSales*(otherP+otherQ+Q2) + O2 + otherSafety
 )
@@ -251,6 +267,82 @@ Only change:
 ```text
 minQty / multiple / trigger
 ```
+
+---
+
+---
+
+# 4. σD (Demand Variability)
+
+### Formula
+
+```excel
+=IFS(
+    I2>=22.5,8,
+    I2>=17.5,7,
+    I2>=12.5,5,
+    I2>=7.5,4,
+    I2>=2.5,3,
+    TRUE,1
+)
+```
+
+---
+
+## Logic (important)
+
+σD is determined **only by daily sales (column I)**.
+
+It is divided into **sales bands**:
+
+| Daily Sales | σD |
+| ----------- | -- |
+| ≥ 22.5      | 8  |
+| ≥ 17.5      | 7  |
+| ≥ 12.5      | 5  |
+| ≥ 7.5       | 4  |
+| ≥ 2.5       | 3  |
+| < 2.5       | 1  |
+
+---
+
+## Why this is done
+
+Instead of manually tuning σD for each SKU:
+
+```text
+σD now automatically adjusts based on sales level
+```
+
+Meaning:
+
+* High sales → higher σD → more safety
+* Low sales → lower σD → leaner stock
+
+---
+
+## Key idea
+
+```text
+σD represents demand uncertainty, not target stock level
+```
+
+Stock level is controlled by:
+
+* ROP
+* PO logic
+* packaging rules
+
+σD only adjusts how much **buffer** is needed.
+
+---
+
+## Maintenance
+
+If adjustment is needed:
+
+* Change only the threshold numbers (22.5, 17.5, etc.)
+* Do NOT change formula structure
 
 ---
 
