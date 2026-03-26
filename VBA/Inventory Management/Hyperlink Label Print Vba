@@ -1,0 +1,266 @@
+Option Explicit
+
+Public Const SRC_HEADER_SHELF As String = "台湾货架位"
+Public Const SRC_HEADER_SKU As String = "SKU编号"
+Public Const SRC_HEADER_GTIN As String = "GTIN"
+Public Const PRINT_SHEET_NAME As String = "标签打印"
+
+' 为了更接近正方形版式，横向不要过宽；同时加大行高与字号，并在行与行之间插入空行。
+Private Const LABEL_ROWS As Long = 12
+Private Const LABEL_FIRST_COL As String = "A"
+Private Const LABEL_LAST_COL As String = "E"
+
+Public Sub BuildTaiwanShelfLabelPrintSheet()
+    Dim wsData As Worksheet
+    Dim wsPrint As Worksheet
+    Dim shelfHeader As Range, skuHeader As Range, gtinHeader As Range
+    Dim lastRow As Long, r As Long, pageIndex As Long
+    Dim shelfText As String, skuText As String, gtinText As String
+    Dim startRow As Long
+
+    Set wsData = ActiveSheet
+
+    Set shelfHeader = FindHeaderCell(wsData, SRC_HEADER_SHELF)
+    Set skuHeader = FindHeaderCell(wsData, SRC_HEADER_SKU)
+    Set gtinHeader = FindHeaderCell(wsData, SRC_HEADER_GTIN)
+
+    If shelfHeader Is Nothing Then
+        MsgBox "未找到表头：" & SRC_HEADER_SHELF, vbExclamation
+        Exit Sub
+    End If
+
+    If skuHeader Is Nothing Then
+        MsgBox "未找到表头：" & SRC_HEADER_SKU, vbExclamation
+        Exit Sub
+    End If
+
+    lastRow = GetLastUsedRow(wsData)
+    If lastRow <= shelfHeader.Row Then
+        MsgBox "没有可生成的标签数据。", vbInformation
+        Exit Sub
+    End If
+
+    Set wsPrint = GetOrCreatePrintSheet(wsData.Parent, wsData)
+    ResetPrintSheet wsPrint
+    RemoveShelfHyperlinks wsData, shelfHeader.Column, shelfHeader.Row + 1, lastRow
+
+    pageIndex = 0
+
+    For r = shelfHeader.Row + 1 To lastRow
+        shelfText = Trim$(CStr(wsData.Cells(r, shelfHeader.Column).Text))
+        skuText = Trim$(CStr(wsData.Cells(r, skuHeader.Column).Text))
+
+        If shelfText <> vbNullString And skuText <> vbNullString Then
+            If Not gtinHeader Is Nothing Then
+                gtinText = Trim$(CStr(wsData.Cells(r, gtinHeader.Column).Text))
+            Else
+                gtinText = vbNullString
+            End If
+
+            pageIndex = pageIndex + 1
+            startRow = GetPageStartRow(pageIndex)
+
+            WriteOneLabel wsPrint, startRow, shelfText, skuText, gtinText
+            AddShelfHyperlink wsData.Cells(r, shelfHeader.Column), wsPrint, startRow
+        End If
+    Next r
+
+    If pageIndex = 0 Then
+        MsgBox "未找到同时包含【台湾货架位】和【SKU编号】的有效行。", vbInformation
+        Exit Sub
+    End If
+
+    FinalizePrintSheet wsPrint, pageIndex
+    wsPrint.Activate
+    wsPrint.PrintPreview
+End Sub
+
+Private Function GetOrCreatePrintSheet(ByVal wb As Workbook, ByVal wsData As Worksheet) As Worksheet
+    On Error Resume Next
+    Set GetOrCreatePrintSheet = wb.Worksheets(PRINT_SHEET_NAME)
+    On Error GoTo 0
+
+    If GetOrCreatePrintSheet Is Nothing Then
+        Set GetOrCreatePrintSheet = wb.Worksheets.Add(After:=wsData)
+        GetOrCreatePrintSheet.Name = PRINT_SHEET_NAME
+    End If
+End Function
+
+Private Sub ResetPrintSheet(ByVal ws As Worksheet)
+    ws.Cells.Clear
+    ws.Cells.Hyperlinks.Delete
+    ws.ResetAllPageBreaks
+    ws.Cells.Font.Name = "Arial"
+    ws.Cells.Font.Size = 11
+End Sub
+
+Private Sub RemoveShelfHyperlinks(ByVal ws As Worksheet, ByVal shelfCol As Long, ByVal firstDataRow As Long, ByVal lastRow As Long)
+    Dim rng As Range
+
+    If lastRow < firstDataRow Then Exit Sub
+
+    Set rng = ws.Range(ws.Cells(firstDataRow, shelfCol), ws.Cells(lastRow, shelfCol))
+    On Error Resume Next
+    rng.Hyperlinks.Delete
+    On Error GoTo 0
+End Sub
+
+Private Sub AddShelfHyperlink(ByVal srcCell As Range, ByVal wsPrint As Worksheet, ByVal targetRow As Long)
+    Dim addr As String
+    addr = "'" & wsPrint.Name & "'!A" & targetRow
+
+    srcCell.Parent.Hyperlinks.Add _
+        Anchor:=srcCell, _
+        Address:="", _
+        SubAddress:=addr, _
+        TextToDisplay:=CStr(srcCell.Value)
+End Sub
+
+Private Function GetPageStartRow(ByVal pageIndex As Long) As Long
+    GetPageStartRow = (pageIndex - 1) * LABEL_ROWS + 1
+End Function
+
+Private Sub WriteOneLabel(ByVal ws As Worksheet, ByVal startRow As Long, _
+                          ByVal shelfText As String, ByVal skuText As String, ByVal gtinText As String)
+    Dim endRow As Long
+    Dim labelRange As Range
+    Dim bodyText As String
+    Dim gtinLine As String
+    Dim shelfLen As Long, skuLen As Long, gtinLen As Long
+    Dim skuStart As Long, gtinStart As Long
+    Dim r As Long
+
+    endRow = startRow + LABEL_ROWS - 1
+
+    If gtinText <> vbNullString Then
+        gtinLine = vbCrLf & vbCrLf & "GTIN: " & gtinText
+    Else
+        gtinLine = vbNullString
+    End If
+
+    bodyText = shelfText & vbCrLf & vbCrLf & skuText & gtinLine
+
+    shelfLen = Len(shelfText)
+    skuLen = Len(skuText)
+    gtinLen = Len("GTIN: " & gtinText)
+    skuStart = shelfLen + 4
+    gtinStart = shelfLen + skuLen + 7
+
+    With ws
+        .Range(.Cells(startRow, LABEL_FIRST_COL), .Cells(endRow, LABEL_LAST_COL)).UnMerge
+        .Range(.Cells(startRow, LABEL_FIRST_COL), .Cells(endRow, LABEL_LAST_COL)).ClearFormats
+
+        ' 恢复更接近正方形的宽度
+        .Columns("A").ColumnWidth = 3.2
+        .Columns("B").ColumnWidth = 10.2
+        .Columns("C").ColumnWidth = 10.2
+        .Columns("D").ColumnWidth = 10.2
+        .Columns("E").ColumnWidth = 3.2
+
+        ' 增加高度，让页面更饱满，也给空行留空间
+        For r = startRow To endRow
+            .Rows(r).RowHeight = 28
+        Next r
+
+        Set labelRange = .Range(.Cells(startRow, LABEL_FIRST_COL), .Cells(endRow, LABEL_LAST_COL))
+        labelRange.Merge
+
+        With labelRange
+            .NumberFormat = "@"
+            .Value = bodyText
+            .WrapText = True
+            .HorizontalAlignment = xlCenter
+            .VerticalAlignment = xlCenter
+            .Font.Name = "Arial"
+            .Font.Size = 20
+            .Font.Bold = False
+            .Interior.Pattern = xlNone
+            .Borders.LineStyle = xlNone
+        End With
+
+        With labelRange.Characters(1, shelfLen).Font
+            .Name = "Arial"
+            .Bold = True
+            .Size = 48
+        End With
+
+        With labelRange.Characters(skuStart, skuLen).Font
+            .Name = "Microsoft JhengHei"
+            .Bold = True
+            .Size = 18
+        End With
+
+        If gtinLine <> vbNullString Then
+            With labelRange.Characters(gtinStart, gtinLen).Font
+                .Name = "Arial"
+                .Bold = False
+                .Size = 18
+            End With
+        End If
+    End With
+End Sub
+
+Private Sub FinalizePrintSheet(ByVal ws As Worksheet, ByVal totalPages As Long)
+    Dim lastRow As Long
+    Dim i As Long
+
+    lastRow = GetPageStartRow(totalPages) + LABEL_ROWS - 1
+
+    ws.ResetAllPageBreaks
+    For i = 2 To totalPages
+        ws.HPageBreaks.Add Before:=ws.Cells(GetPageStartRow(i), 1)
+    Next i
+
+    With ws
+        .DisplayPageBreaks = False
+
+        With .PageSetup
+            .PrintArea = ws.Range(LABEL_FIRST_COL & "1:" & LABEL_LAST_COL & lastRow).Address
+            .Zoom = False
+            .FitToPagesWide = 1
+            .FitToPagesTall = totalPages
+            .Orientation = xlPortrait
+            .CenterHorizontally = True
+            .CenterVertically = True
+            .LeftMargin = Application.CentimetersToPoints(0.05)
+            .RightMargin = Application.CentimetersToPoints(0.05)
+            .TopMargin = Application.CentimetersToPoints(0.05)
+            .BottomMargin = Application.CentimetersToPoints(0.05)
+            .HeaderMargin = 0
+            .FooterMargin = 0
+        End With
+
+        On Error Resume Next
+        .PageSetup.PaperSize = xlPaperUser
+        On Error GoTo 0
+    End With
+End Sub
+
+Private Function FindHeaderCell(ByVal ws As Worksheet, ByVal headerText As String) As Range
+    Set FindHeaderCell = ws.Cells.Find(What:=headerText, After:=ws.Cells(1, 1), LookIn:=xlValues, _
+                                       LookAt:=xlWhole, SearchOrder:=xlByRows, _
+                                       SearchDirection:=xlNext, MatchCase:=False)
+End Function
+
+Private Function GetLastUsedRow(ByVal ws As Worksheet) As Long
+    Dim lastCell As Range
+
+    On Error Resume Next
+    Set lastCell = ws.Cells.Find(What:="*", After:=ws.Cells(1, 1), LookIn:=xlFormulas, _
+                                 LookAt:=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlPrevious)
+    On Error GoTo 0
+
+    If lastCell Is Nothing Then
+        GetLastUsedRow = 1
+    Else
+        GetLastUsedRow = lastCell.Row
+    End If
+End Function
+
+' 本版修正：
+' 1. 恢复为更接近正方形的 A:E 版心，避免页面变成长方形。
+' 2. 三行之间插入空行：货架位、SKU、GTIN 的视觉间距更大。
+' 3. 全部字号增大，让内容更饱满。
+' 4. GTIN 仍用 .Text + Arial，减少末尾数字显示异常。
+
+
