@@ -23,6 +23,7 @@ The macro **no longer depends on fixed column positions**.
 | SKU      | SKU编号       |
 | Quantity | 实发数量        |
 | Box No   | 箱號 / 箱号     |
+| Shelf    | 货架位 / 台湾货架位 |
 
 👉 Columns can be reordered safely as long as headers remain unchanged.
 
@@ -60,11 +61,12 @@ Validation is applied to **selected non-empty 箱号 rows only**.
 | 实发数量  | Must be numeric | ❌ Stop |
 | 实发数量  | Must be > 0     | ❌ Stop |
 | 实发数量  | Must be integer | ❌ Stop |
+| 货架位   | Cannot be empty | ❌ Stop |
 
 ### Example Warning
 
 ```
-实发数量 不是整数（行 25，箱号 03）。请修正后再打印。
+货架位 为空（行 25，箱号 03）。请修正后再打印。
 ```
 
 👉 Behavior:
@@ -122,23 +124,36 @@ Outputs:
 
 ---
 
-## 🧾 Label Content
+## 🧾 Label Content (UPDATED)
 
 Each label contains:
 
 * 箱号
 * SKU数
 * 明细SKU * 数量
+* 货架位（右侧独立列显示）
 
-Example:
+### Layout Structure
+
+| 明细SKU * 数量 ↓ | 货架位 ↓ |
+| ------------ | ----- |
+| SKU * Qty    | Shelf |
+
+### Example:
 
 ```
 箱号：01
 SKU数：2
-明细SKU * 数量：
-MJ-AAA  *  30
-MJ-BBB  *  10
+
+明细SKU * 数量 ↓          货架位 ↓
+MJ-AAA  *  30            F-05-01
+MJ-BBB  *  10            F-05-02
 ```
+
+👉 Key change:
+
+* Shelf number is **no longer appended as text**
+* It is rendered in a **separate right column for alignment stability**
 
 ---
 
@@ -170,6 +185,7 @@ This macro enforces **real-world warehouse constraints**:
 
 * No fractional shipments
 * No zero shipment
+* No missing shelf location
 * No dirty data allowed into labels
 
 At the same time, it improves usability:
@@ -184,7 +200,7 @@ At the same time, it improves usability:
 
 ## 📌 Status
 
-**Stable (Smart Selection + Strict Validation Version)**
+**Stable (Shelf-Integrated Layout Version)**
 
 ---
 
