@@ -1,0 +1,438 @@
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import sys
+from collections import Counter, defaultdict
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Iterable
+
+try:
+    from pypdf import PdfReader
+except ImportError as exc:
+    raise SystemExit(
+        "Missing dependency: pypdf\n"
+        "Please install it first with: pip install pypdf"
+    ) from exc
+
+
+# =========================
+# Configuration
+# =========================
+SCRIPT_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = Path(r"C:\Users\zouzh\Downloads")
+ALLOWED_SUFFIXES = {".pdf"}
+
+LOGISTICS_RULES = {
+    "711": {
+        "target_name": "711",
+        "keywords": ["統一超商", "交貨便", "7-11"],
+        "order_patterns": [
+            r"寄件訂單編號[:：]\s*([A-Z0-9]+)",
+        ],
+    },
+    "store_to_store": {
+        "target_name": "店到店",
+        "keywords": ["標準配送", "店到店"],
+        "order_patterns": [
+            r"蝦皮訂單編號[:：]\s*([A-Z0-9]+)",
+        ],
+    },
+    "familymart": {
+        "target_name": "全家",
+        "keywords": [
+            "FamilyMart寄取貨單",
+            "FamilyMart",
+            "全家",
+            "寄件專用",
+            "物流專用",
+            "取件專用",
+        ],
+        "order_patterns": [
+            r"蝦皮訂單編號[:：]\s*([A-Z0-9]+)",
+            r"(26\d{8,}[A-Z0-9]{0,6})",
+        ],
+    },
+}
+
+
+@dataclass
+class PdfInfo:
+    path: Path
+    logistics_key: str
+    target_name: str
+    page_count: int
+    order_ids: list[str] | None = None
+    new_path: Path | None = None
+
+
+class ProcessingError(Exception):
+    pass
+
+
+def fuzzy_contains(text: str, keyword: str) -> bool:
+    compact_text = re.sub(r"\s+", "", text).lower()
+    compact_keyword = re.sub(r"\s+", "", keyword).lower()
+    return compact_keyword in compact_text
+
+
+def main() -> None:
+    try:
+        winrar_exe = find_winrar_exe()
+        pdf_paths = get_pdf_files(SCRIPT_DIR)
+        pdf_infos = [analyze_pdf(path) for path in pdf_paths]
+
+        validate_order_ids_when_needed(pdf_infos)
+        assign_new_names(pdf_infos)
+        rename_pdfs(pdf_infos)
+
+        rar_path = build_output_rar_path(OUTPUT_DIR)
+        create_rar(winrar_exe, rar_path, [info.new_path for info in pdf_infos if info.new_path])
+        delete_files([info.new_path for info in pdf_infos if info.new_path])
+
+        print("Done.")
+        print(f"RAR created: {rar_path}")
+
+    except ProcessingError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+    except Exception as exc:
+        print(f"UNEXPECTED ERROR: {exc}")
+        sys.exit(1)
+
+
+# =========================
+# File discovery
+# =========================
+def get_pdf_files(folder: Path) -> list[Path]:
+    pdfs = sorted(
+        p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES
+    )
+    if not pdfs:
+        raise ProcessingError(f"No PDF files found in: {folder}")
+    return pdfs
+
+
+# =========================
+# PDF analysis
+# =========================
+def analyze_pdf(path: Path) -> PdfInfo:
+    try:
+        reader = PdfReader(str(path))
+    except Exception as exc:
+        raise ProcessingError(f"Failed to read PDF: {path.name}. Details: {exc}") from exc
+
+    page_count = len(reader.pages)
+    if page_count == 0:
+        raise ProcessingError(f"PDF has no pages: {path.name}")
+
+    page_texts: list[str] = []
+    for idx, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            raise ProcessingError(
+                f"Failed to extract text from {path.name}, page {idx}. Details: {exc}"
+            ) from exc
+        page_texts.append(text)
+
+    full_text = "\n".join(page_texts)
+    logistics_key = detect_logistics_type(path.name, full_text)
+    rule = LOGISTICS_RULES[logistics_key]
+
+    return PdfInfo(
+        path=path,
+        logistics_key=logistics_key,
+        target_name=rule["target_name"],
+        page_count=page_count,
+    )
+
+
+def detect_logistics_type(filename: str, text: str) -> str:
+    matched: list[str] = []
+
+    if any(fuzzy_contains(text, keyword) for keyword in LOGISTICS_RULES["711"]["keywords"]):
+        matched.append("711")
+
+    if any(fuzzy_contains(text, keyword) for keyword in LOGISTICS_RULES["store_to_store"]["keywords"]):
+        matched.append("store_to_store")
+
+    familymart_hit_count = sum(
+        1 for keyword in LOGISTICS_RULES["familymart"]["keywords"] if fuzzy_contains(text, keyword)
+    )
+    if (
+        fuzzy_contains(text, "FamilyMart")
+        or fuzzy_contains(text, "全家")
+        or familymart_hit_count >= 3
+    ):
+        matched.append("familymart")
+
+    if len(matched) == 1:
+        return matched[0]
+
+    if not matched:
+        raise ProcessingError(
+            f"Unrecognized logistics type in file: {filename}. "
+            f"Only these types are allowed: 統一超商 / 標準配送 / FamilyMart"
+        )
+
+    raise ProcessingError(
+        f"Ambiguous logistics type in file: {filename}. Matched types: {matched}"
+    )
+
+
+def extract_order_ids(filename: str, page_texts: list[str], patterns: list[str]) -> list[str]:
+    order_ids: list[str] = []
+
+    for page_index, text in enumerate(page_texts, start=1):
+        found_id = None
+        normalized = normalize_text(text)
+
+        for pattern in patterns:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if match:
+                found_id = match.group(1).strip().upper()
+                break
+
+        if not found_id:
+            raise ProcessingError(
+                f"Could not extract order ID from {filename}, page {page_index}."
+            )
+
+        order_ids.append(found_id)
+
+    return order_ids
+
+
+def normalize_text(text: str) -> str:
+    text = text.replace("\u3000", " ")
+    text = text.replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    return text
+
+
+def read_pdf_texts(path: Path) -> list[str]:
+    try:
+        reader = PdfReader(str(path))
+    except Exception as exc:
+        raise ProcessingError(
+            f"Failed to read PDF for order extraction: {path.name}. Details: {exc}"
+        ) from exc
+
+    page_texts: list[str] = []
+    for idx, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            raise ProcessingError(
+                f"Failed to extract text from {path.name}, page {idx}. Details: {exc}"
+            ) from exc
+        page_texts.append(text)
+
+    return page_texts
+
+
+# =========================
+# Validation
+# =========================
+def validate_order_ids_when_needed(pdf_infos: list[PdfInfo]) -> None:
+    groups: dict[str, list[PdfInfo]] = defaultdict(list)
+    for info in pdf_infos:
+        groups[info.logistics_key].append(info)
+
+    duplicated_logistics_groups = {
+        logistics_key: infos
+        for logistics_key, infos in groups.items()
+        if len(infos) > 1
+    }
+
+    if not duplicated_logistics_groups:
+        return
+
+    all_order_ids: list[tuple[str, str, str]] = []
+    for logistics_key, infos in duplicated_logistics_groups.items():
+        patterns = LOGISTICS_RULES[logistics_key]["order_patterns"]
+        for info in infos:
+            if info.order_ids is None:
+                info.order_ids = extract_order_ids(info.path.name, read_pdf_texts(info.path), patterns)
+
+            if len(info.order_ids) != info.page_count:
+                raise ProcessingError(
+                    f"Order ID count does not match page count in {info.path.name}. "
+                    f"Pages: {info.page_count}, extracted order IDs: {len(info.order_ids)}"
+                )
+
+            for order_id in info.order_ids:
+                all_order_ids.append((logistics_key, order_id, info.path.name))
+
+    counter = Counter((logistics_key, order_id) for logistics_key, order_id, _ in all_order_ids)
+
+    duplicate_map: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for logistics_key, order_id, filename in all_order_ids:
+        key = (logistics_key, order_id)
+        if counter[key] > 1:
+            duplicate_map[key].append(filename)
+
+    if not duplicate_map:
+        return
+
+    lines = []
+    for (logistics_key, order_id), filenames in sorted(duplicate_map.items()):
+        target_name = LOGISTICS_RULES[logistics_key]["target_name"]
+        unique_files = sorted(set(filenames))
+        lines.append(f"{target_name} | {order_id} -> {', '.join(unique_files)}")
+
+    raise ProcessingError(
+        "Duplicated 訂單編號 detected within duplicated logistics type PDFs.\n"
+        + "\n".join(lines)
+    )
+
+
+# =========================
+# Renaming
+# =========================
+def assign_new_names(pdf_infos: list[PdfInfo]) -> None:
+    groups: dict[str, list[PdfInfo]] = defaultdict(list)
+    for info in pdf_infos:
+        groups[info.target_name].append(info)
+
+    reserved_names: set[str] = set()
+
+    for target_name, items in groups.items():
+        items.sort(key=lambda x: x.path.name.lower())
+        for index, info in enumerate(items, start=1):
+            base_name = f"{target_name}-{info.page_count}单"
+            if len(items) > 1:
+                base_name = f"{base_name}({index})"
+
+            candidate = make_unique_pdf_name(base_name, reserved_names)
+            info.new_path = info.path.with_name(candidate)
+            reserved_names.add(candidate.lower())
+
+
+def make_unique_pdf_name(base_stem: str, reserved_names: set[str]) -> str:
+    candidate = f"{base_stem}.pdf"
+    counter = 2
+
+    while candidate.lower() in reserved_names:
+        candidate = f"{base_stem}({counter}).pdf"
+        counter += 1
+
+    return candidate
+
+
+def rename_pdfs(pdf_infos: list[PdfInfo]) -> None:
+    for info in pdf_infos:
+        if info.new_path is None:
+            raise ProcessingError(f"Internal error: no new filename for {info.path.name}")
+
+        if info.new_path.exists() and info.new_path.resolve() != info.path.resolve():
+            raise ProcessingError(f"Target PDF name already exists: {info.new_path.name}")
+
+    for info in pdf_infos:
+        assert info.new_path is not None
+        if info.path.resolve() == info.new_path.resolve():
+            continue
+        try:
+            info.path.rename(info.new_path)
+        except Exception as exc:
+            raise ProcessingError(
+                f"Failed to rename {info.path.name} -> {info.new_path.name}. Details: {exc}"
+            ) from exc
+
+
+# =========================
+# RAR creation
+# =========================
+def find_winrar_exe() -> Path:
+    candidates = [
+        Path(r"C:\Program Files\WinRAR\WinRAR.exe"),
+        Path(r"C:\Program Files (x86)\WinRAR\WinRAR.exe"),
+        Path(r"C:\Program Files\WinRAR\Rar.exe"),
+        Path(r"C:\Program Files (x86)\WinRAR\Rar.exe"),
+    ]
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    winrar_from_path = shutil.which("WinRAR") or shutil.which("Rar") or shutil.which("rar")
+    if winrar_from_path:
+        return Path(winrar_from_path)
+
+    raise ProcessingError(
+        "WinRAR was not found. WinRAR must be installed and callable, otherwise the script stops."
+    )
+
+
+def build_output_rar_path(output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_stem = datetime.today().strftime("%Y%m%d") + "三得美"
+
+    candidate = output_dir / f"{base_stem}.rar"
+    if not candidate.exists():
+        return candidate
+
+    index = 2
+    while True:
+        candidate = output_dir / f"{base_stem}({index}).rar"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def create_rar(winrar_exe: Path, rar_path: Path, files: Iterable[Path]) -> None:
+    file_list = list(files)
+    if not file_list:
+        raise ProcessingError("No renamed PDF files are available for compression.")
+
+    cmd = [
+        str(winrar_exe),
+        "a",
+        "-ep",
+        str(rar_path),
+        *[str(p) for p in file_list],
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as exc:
+        raise ProcessingError(f"Failed to launch WinRAR. Details: {exc}") from exc
+
+    if result.returncode != 0:
+        raise ProcessingError(
+            "WinRAR failed to create the RAR archive.\n"
+            f"Return code: {result.returncode}\n"
+            f"STDOUT: {result.stdout.strip()}\n"
+            f"STDERR: {result.stderr.strip()}"
+        )
+
+    if not rar_path.exists() or rar_path.stat().st_size == 0:
+        raise ProcessingError(
+            "RAR creation appeared to succeed, but the output RAR file was not created correctly."
+        )
+
+
+# =========================
+# Cleanup
+# =========================
+def delete_files(files: Iterable[Path]) -> None:
+    for file_path in files:
+        try:
+            file_path.unlink()
+        except Exception as exc:
+            raise ProcessingError(
+                f"RAR was created, but failed to delete source file: {file_path.name}. Details: {exc}"
+            ) from exc
+
+
+if __name__ == "__main__":
+    main()
