@@ -1,0 +1,418 @@
+from __future__ import annotations
+
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+try:
+    from pypdf import PdfReader, PdfWriter
+except ImportError as exc:
+    raise SystemExit(
+        "Missing dependency: pypdf\n"
+        "Please install it first with: pip install pypdf"
+    ) from exc
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = Path(r"C:\Users\zouzh\Downloads")
+ALLOWED_SUFFIXES = {".pdf"}
+NO_PICK_SUFFIX = "(无拣货单)"
+RAR_BASE_NAME = "三得美（现货）"
+
+LOGISTICS_RULES = {
+    "711": {
+        "target_name": "711",
+        "keywords": ["統一超商", "交貨便", "7-11"],
+        "strong_page_markers": ["統一超商", "交貨便", "寄件訂單編號", "交貨便服務代碼"],
+    },
+    "store_to_store": {
+        "target_name": "店到店",
+        "keywords": ["標準配送", "店到店", "蝦皮店到店"],
+        "strong_page_markers": ["標準配送", "蝦皮訂單編號", "門市交寄"],
+    },
+    "familymart": {
+        "target_name": "全家",
+        "keywords": ["FamilyMart", "全家", "FamilyMart寄取貨單"],
+        "strong_page_markers": ["FamilyMart", "全家", "寄件專用", "物流專用", "取件專用"],
+    },
+    "next_day": {
+        "target_name": "隔日到货",
+        "keywords": ["隔日到貨", "隔日到货"],
+        "strong_page_markers": ["隔日到貨", "蝦皮訂單編號", "門市交寄"],
+    },
+    "hilife": {
+        "target_name": "莱尔福",
+        "keywords": ["Hi-Life", "萊爾富", "莱尔福", "Hi-Life 寄取貨單"],
+        "strong_page_markers": ["Hi-Life", "寄取貨單", "訂單編號", "寄件代碼"],
+    },
+}
+
+PICK_PAGE_MARKERS = [
+    "Order No:",
+    "Tracking No:",
+    "Total Items:",
+    "货架位",
+    "數量",
+    "数量",
+]
+
+
+@dataclass
+class PageInfo:
+    index: int
+    raw_text: str
+    normalized_text: str
+    kind: str  # logistics / pick / empty
+
+
+@dataclass
+class PdfInfo:
+    original_path: Path
+    logistics_key: str
+    target_name: str
+    logistics_count: int
+    logistics_page_indices: list[int]
+    renamed_original_path: Path | None = None
+    no_pick_path: Path | None = None
+
+
+class ProcessingError(Exception):
+    pass
+
+
+def main() -> None:
+    try:
+        winrar_exe = find_winrar_exe()
+        pdf_paths = get_pdf_files(SCRIPT_DIR)
+        pdf_infos = [analyze_pdf(path) for path in pdf_paths]
+
+        assign_output_names(pdf_infos)
+        rename_original_pdfs(pdf_infos)
+        build_no_pick_pdfs(pdf_infos)
+
+        all_outputs = collect_output_files(pdf_infos)
+        rar_path = build_output_rar_path(OUTPUT_DIR)
+        create_rar(winrar_exe, rar_path, all_outputs)
+        delete_files(all_outputs)
+
+        print("Done.")
+        print(f"RAR created: {rar_path}")
+
+    except ProcessingError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+    except Exception as exc:
+        print(f"UNEXPECTED ERROR: {exc}")
+        sys.exit(1)
+
+
+def get_pdf_files(folder: Path) -> list[Path]:
+    pdfs = sorted(
+        p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES
+    )
+    if not pdfs:
+        raise ProcessingError(f"No PDF files found in: {folder}")
+    return pdfs
+
+
+def analyze_pdf(path: Path) -> PdfInfo:
+    page_texts = read_pdf_texts(path)
+    if not page_texts:
+        raise ProcessingError(f"PDF has no pages: {path.name}")
+
+    full_text = "\n".join(page_texts)
+    logistics_key = detect_logistics_type(path.name, full_text)
+    target_name = LOGISTICS_RULES[logistics_key]["target_name"]
+
+    page_infos = classify_pages(page_texts, logistics_key)
+    logistics_page_indices = [page.index for page in page_infos if page.kind == "logistics"]
+
+    if not logistics_page_indices:
+        raise ProcessingError(f"No logistics label pages detected in: {path.name}")
+
+    return PdfInfo(
+        original_path=path,
+        logistics_key=logistics_key,
+        target_name=target_name,
+        logistics_count=len(logistics_page_indices),
+        logistics_page_indices=logistics_page_indices,
+    )
+
+
+def read_pdf_texts(path: Path) -> list[str]:
+    try:
+        reader = PdfReader(str(path))
+    except Exception as exc:
+        raise ProcessingError(f"Failed to read PDF: {path.name}. Details: {exc}") from exc
+
+    page_texts: list[str] = []
+    for idx, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            raise ProcessingError(
+                f"Failed to extract text from {path.name}, page {idx}. Details: {exc}"
+            ) from exc
+        page_texts.append(text)
+    return page_texts
+
+
+def normalize_text(text: str) -> str:
+    text = text.replace("\u3000", " ")
+    text = text.replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    return text
+
+
+def compact(text: str) -> str:
+    return re.sub(r"\s+", "", text).lower()
+
+
+def fuzzy_contains(text: str, keyword: str) -> bool:
+    return compact(keyword) in compact(text)
+
+
+def detect_logistics_type(filename: str, full_text: str) -> str:
+    matched: list[str] = []
+    for logistics_key, rule in LOGISTICS_RULES.items():
+        if any(fuzzy_contains(full_text, keyword) for keyword in rule["keywords"]):
+            matched.append(logistics_key)
+
+    if len(matched) == 1:
+        return matched[0]
+
+    if not matched:
+        raise ProcessingError(
+            f"Unrecognized logistics type in file: {filename}. Only these types are allowed: "
+            f"統一超商 / 標準配送 / FamilyMart / 隔日到貨 / Hi-Life"
+        )
+
+    # Prefer more specific types when overlaps happen.
+    if "next_day" in matched and "store_to_store" in matched:
+        matched = [m for m in matched if m != "store_to_store"]
+    if len(matched) == 1:
+        return matched[0]
+
+    raise ProcessingError(f"Ambiguous logistics type in file: {filename}. Matched types: {matched}")
+
+
+def classify_pages(page_texts: list[str], logistics_key: str) -> list[PageInfo]:
+    result: list[PageInfo] = []
+    strong_markers = LOGISTICS_RULES[logistics_key]["strong_page_markers"]
+
+    for idx, raw_text in enumerate(page_texts):
+        normalized = normalize_text(raw_text)
+        kind = classify_single_page(normalized, strong_markers)
+        result.append(PageInfo(index=idx, raw_text=raw_text, normalized_text=normalized, kind=kind))
+
+    return result
+
+
+def classify_single_page(text: str, strong_logistics_markers: list[str]) -> str:
+    stripped = compact(text)
+    if not stripped or len(stripped) <= 6:
+        return "empty"
+
+    pick_hits = sum(1 for marker in PICK_PAGE_MARKERS if fuzzy_contains(text, marker))
+    logistics_hits = sum(1 for marker in strong_logistics_markers if fuzzy_contains(text, marker))
+
+    # Strong pick-label signature.
+    if pick_hits >= 3:
+        return "pick"
+
+    # Strong logistics signature.
+    if logistics_hits >= 2:
+        return "logistics"
+
+    # If the page looks like warehouse picking output, treat it as pick.
+    if pick_hits >= 2 and ("zz" in stripped or "orderno:" in stripped or "trackingno:" in stripped):
+        return "pick"
+
+    # Empty / nearly blank pages are ignored.
+    if len(re.sub(r"[^A-Za-z0-9\u4e00-\u9fff]", "", text)) <= 4:
+        return "empty"
+
+    # Fallback by subtraction philosophy: pages that are not clearly pick or empty
+    # are treated as logistics pages.
+    return "logistics"
+
+
+def assign_output_names(pdf_infos: list[PdfInfo]) -> None:
+    groups: dict[str, list[PdfInfo]] = {}
+    for info in pdf_infos:
+        groups.setdefault(info.target_name, []).append(info)
+
+    reserved: set[str] = set()
+
+    for target_name, items in groups.items():
+        items.sort(key=lambda item: item.original_path.name.lower())
+        for index, info in enumerate(items, start=1):
+            base_name = f"{target_name}-{info.logistics_count}单"
+            if len(items) > 1:
+                base_name = f"{base_name}({index})"
+
+            original_filename = make_unique_filename(base_name, ".pdf", reserved)
+            no_pick_filename = make_unique_filename(f"{base_name}{NO_PICK_SUFFIX}", ".pdf", reserved)
+
+            info.renamed_original_path = info.original_path.with_name(original_filename)
+            info.no_pick_path = info.original_path.with_name(no_pick_filename)
+
+            reserved.add(original_filename.lower())
+            reserved.add(no_pick_filename.lower())
+
+
+def make_unique_filename(stem: str, suffix: str, reserved: set[str]) -> str:
+    candidate = f"{stem}{suffix}"
+    counter = 2
+    while candidate.lower() in reserved:
+        candidate = f"{stem}({counter}){suffix}"
+        counter += 1
+    return candidate
+
+
+def rename_original_pdfs(pdf_infos: list[PdfInfo]) -> None:
+    for info in pdf_infos:
+        if info.renamed_original_path is None:
+            raise ProcessingError(f"Internal error: no renamed output path for {info.original_path.name}")
+        if info.no_pick_path is None:
+            raise ProcessingError(f"Internal error: no no-pick output path for {info.original_path.name}")
+        if info.no_pick_path.exists():
+            raise ProcessingError(f"Target file already exists: {info.no_pick_path.name}")
+        if info.renamed_original_path.exists() and info.renamed_original_path.resolve() != info.original_path.resolve():
+            raise ProcessingError(f"Target file already exists: {info.renamed_original_path.name}")
+
+    for info in pdf_infos:
+        assert info.renamed_original_path is not None
+        if info.original_path.resolve() == info.renamed_original_path.resolve():
+            continue
+        try:
+            info.original_path.rename(info.renamed_original_path)
+        except Exception as exc:
+            raise ProcessingError(
+                f"Failed to rename {info.original_path.name} -> {info.renamed_original_path.name}. Details: {exc}"
+            ) from exc
+
+
+def build_no_pick_pdfs(pdf_infos: list[PdfInfo]) -> None:
+    for info in pdf_infos:
+        assert info.renamed_original_path is not None
+        assert info.no_pick_path is not None
+
+        try:
+            reader = PdfReader(str(info.renamed_original_path))
+        except Exception as exc:
+            raise ProcessingError(f"Failed to reopen renamed PDF: {info.renamed_original_path.name}. Details: {exc}") from exc
+
+        writer = PdfWriter()
+        for page_index in info.logistics_page_indices:
+            try:
+                writer.add_page(reader.pages[page_index])
+            except Exception as exc:
+                raise ProcessingError(
+                    f"Failed to copy logistics page {page_index + 1} from {info.renamed_original_path.name}. Details: {exc}"
+                ) from exc
+
+        if len(writer.pages) != info.logistics_count:
+            raise ProcessingError(
+                f"No-pick PDF page count mismatch in {info.renamed_original_path.name}. "
+                f"Expected: {info.logistics_count}, actual: {len(writer.pages)}"
+            )
+
+        try:
+            with open(info.no_pick_path, "wb") as f:
+                writer.write(f)
+        except Exception as exc:
+            raise ProcessingError(
+                f"Failed to write no-pick PDF: {info.no_pick_path.name}. Details: {exc}"
+            ) from exc
+
+
+def collect_output_files(pdf_infos: list[PdfInfo]) -> list[Path]:
+    files: list[Path] = []
+    for info in pdf_infos:
+        assert info.renamed_original_path is not None
+        assert info.no_pick_path is not None
+        files.append(info.renamed_original_path)
+        files.append(info.no_pick_path)
+    return files
+
+
+def find_winrar_exe() -> Path:
+    candidates = [
+        Path(r"C:\Program Files\WinRAR\WinRAR.exe"),
+        Path(r"C:\Program Files (x86)\WinRAR\WinRAR.exe"),
+        Path(r"C:\Program Files\WinRAR\Rar.exe"),
+        Path(r"C:\Program Files (x86)\WinRAR\Rar.exe"),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    winrar_from_path = shutil.which("WinRAR") or shutil.which("Rar") or shutil.which("rar")
+    if winrar_from_path:
+        return Path(winrar_from_path)
+
+    raise ProcessingError("WinRAR was not found. WinRAR must be installed and callable, otherwise the script stops.")
+
+
+def build_output_rar_path(output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    base_stem = datetime.today().strftime("%Y%m%d") + RAR_BASE_NAME
+
+    candidate = output_dir / f"{base_stem}.rar"
+    if not candidate.exists():
+        return candidate
+
+    index = 2
+    while True:
+        candidate = output_dir / f"{base_stem}({index}).rar"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def create_rar(winrar_exe: Path, rar_path: Path, files: list[Path]) -> None:
+    if not files:
+        raise ProcessingError("No output files are available for compression.")
+
+    cmd = [
+        str(winrar_exe),
+        "a",
+        "-ep",
+        str(rar_path),
+        *[str(p) for p in files],
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    except Exception as exc:
+        raise ProcessingError(f"Failed to launch WinRAR. Details: {exc}") from exc
+
+    if result.returncode != 0:
+        raise ProcessingError(
+            "WinRAR failed to create the RAR archive.\n"
+            f"Return code: {result.returncode}\n"
+            f"STDOUT: {result.stdout.strip()}\n"
+            f"STDERR: {result.stderr.strip()}"
+        )
+
+    if not rar_path.exists() or rar_path.stat().st_size == 0:
+        raise ProcessingError("RAR creation appeared to succeed, but the output RAR file was not created correctly.")
+
+
+def delete_files(files: list[Path]) -> None:
+    for file_path in files:
+        try:
+            file_path.unlink()
+        except Exception as exc:
+            raise ProcessingError(
+                f"RAR was created, but failed to delete source file: {file_path.name}. Details: {exc}"
+            ) from exc
+
+
+if __name__ == "__main__":
+    main()
