@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+
 
 try:
     from pypdf import PdfReader
@@ -19,9 +19,6 @@ except ImportError as exc:
     ) from exc
 
 
-# =========================
-# Configuration
-# =========================
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = Path(r"C:\Users\zouzh\Downloads")
 ALLOWED_SUFFIXES = {".pdf"}
@@ -31,14 +28,15 @@ LOGISTICS_RULES = {
         "target_name": "711",
         "keywords": ["統一超商", "交貨便", "7-11"],
         "order_patterns": [
-            r"寄件訂單編號[:：]\s*([A-Z0-9]+)",
+            r"寄件訂單編號\s*[:：]?\s*([A-Z0-9]+)",
         ],
     },
     "store_to_store": {
         "target_name": "店到店",
         "keywords": ["標準配送", "店到店"],
         "order_patterns": [
-            r"蝦皮訂單編號[:：]\s*([A-Z0-9]+)",
+            r"蝦皮訂單編號\s*[:：]?\s*([A-Z0-9]+)",
+            r"(26\d{8,}[A-Z0-9]{0,6})",
         ],
     },
     "familymart": {
@@ -52,7 +50,7 @@ LOGISTICS_RULES = {
             "取件專用",
         ],
         "order_patterns": [
-            r"蝦皮訂單編號[:：]\s*([A-Z0-9]+)",
+            r"蝦皮訂單編號\s*[:：]?\s*([A-Z0-9]+)",
             r"(26\d{8,}[A-Z0-9]{0,6})",
         ],
     },
@@ -73,12 +71,6 @@ class ProcessingError(Exception):
     pass
 
 
-def fuzzy_contains(text: str, keyword: str) -> bool:
-    compact_text = re.sub(r"\s+", "", text).lower()
-    compact_keyword = re.sub(r"\s+", "", keyword).lower()
-    return compact_keyword in compact_text
-
-
 def main() -> None:
     try:
         winrar_exe = find_winrar_exe()
@@ -90,8 +82,12 @@ def main() -> None:
         rename_pdfs(pdf_infos)
 
         rar_path = build_output_rar_path(OUTPUT_DIR)
-        create_rar(winrar_exe, rar_path, [info.new_path for info in pdf_infos if info.new_path])
-        delete_files([info.new_path for info in pdf_infos if info.new_path])
+        create_rar(
+            winrar_exe,
+            rar_path,
+            [info.new_path for info in pdf_infos if info.new_path is not None],
+        )
+        delete_files([info.new_path for info in pdf_infos if info.new_path is not None])
 
         print("Done.")
         print(f"RAR created: {rar_path}")
@@ -104,30 +100,21 @@ def main() -> None:
         sys.exit(1)
 
 
-# =========================
-# File discovery
-# =========================
 def get_pdf_files(folder: Path) -> list[Path]:
     pdfs = sorted(
-        p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES
+        p for p in folder.iterdir()
+        if p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES
     )
     if not pdfs:
         raise ProcessingError(f"No PDF files found in: {folder}")
     return pdfs
 
 
-# =========================
-# PDF analysis
-# =========================
-def analyze_pdf(path: Path) -> PdfInfo:
+def read_pdf_texts(path: Path) -> list[str]:
     try:
         reader = PdfReader(str(path))
     except Exception as exc:
         raise ProcessingError(f"Failed to read PDF: {path.name}. Details: {exc}") from exc
-
-    page_count = len(reader.pages)
-    if page_count == 0:
-        raise ProcessingError(f"PDF has no pages: {path.name}")
 
     page_texts: list[str] = []
     for idx, page in enumerate(reader.pages, start=1):
@@ -139,16 +126,20 @@ def analyze_pdf(path: Path) -> PdfInfo:
             ) from exc
         page_texts.append(text)
 
-    full_text = "\n".join(page_texts)
-    logistics_key = detect_logistics_type(path.name, full_text)
-    rule = LOGISTICS_RULES[logistics_key]
+    return page_texts
 
-    return PdfInfo(
-        path=path,
-        logistics_key=logistics_key,
-        target_name=rule["target_name"],
-        page_count=page_count,
-    )
+
+def normalize_text(text: str) -> str:
+    text = text.replace("\u3000", " ")
+    text = text.replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    return text
+
+
+def fuzzy_contains(text: str, keyword: str) -> bool:
+    compact_text = re.sub(r"\s+", "", text).lower()
+    compact_keyword = re.sub(r"\s+", "", keyword).lower()
+    return compact_keyword in compact_text
 
 
 def detect_logistics_type(filename: str, text: str) -> str:
@@ -157,11 +148,16 @@ def detect_logistics_type(filename: str, text: str) -> str:
     if any(fuzzy_contains(text, keyword) for keyword in LOGISTICS_RULES["711"]["keywords"]):
         matched.append("711")
 
-    if any(fuzzy_contains(text, keyword) for keyword in LOGISTICS_RULES["store_to_store"]["keywords"]):
+    if any(
+        fuzzy_contains(text, keyword)
+        for keyword in LOGISTICS_RULES["store_to_store"]["keywords"]
+    ):
         matched.append("store_to_store")
 
     familymart_hit_count = sum(
-        1 for keyword in LOGISTICS_RULES["familymart"]["keywords"] if fuzzy_contains(text, keyword)
+        1
+        for keyword in LOGISTICS_RULES["familymart"]["keywords"]
+        if fuzzy_contains(text, keyword)
     )
     if (
         fuzzy_contains(text, "FamilyMart")
@@ -188,8 +184,8 @@ def extract_order_ids(filename: str, page_texts: list[str], patterns: list[str])
     order_ids: list[str] = []
 
     for page_index, text in enumerate(page_texts, start=1):
-        found_id = None
         normalized = normalize_text(text)
+        found_id = None
 
         for pattern in patterns:
             match = re.search(pattern, normalized, flags=re.IGNORECASE)
@@ -207,57 +203,51 @@ def extract_order_ids(filename: str, page_texts: list[str], patterns: list[str])
     return order_ids
 
 
-def normalize_text(text: str) -> str:
-    text = text.replace("\u3000", " ")
-    text = text.replace("\r", "\n")
-    text = re.sub(r"[ \t]+", " ", text)
-    return text
+def analyze_pdf(path: Path) -> PdfInfo:
+    page_texts = read_pdf_texts(path)
+    page_count = len(page_texts)
+    if page_count == 0:
+        raise ProcessingError(f"PDF has no pages: {path.name}")
+
+    full_text = "\n".join(page_texts)
+    logistics_key = detect_logistics_type(path.name, full_text)
+    target_name = LOGISTICS_RULES[logistics_key]["target_name"]
+
+    return PdfInfo(
+        path=path,
+        logistics_key=logistics_key,
+        target_name=target_name,
+        page_count=page_count,
+    )
 
 
-def read_pdf_texts(path: Path) -> list[str]:
-    try:
-        reader = PdfReader(str(path))
-    except Exception as exc:
-        raise ProcessingError(
-            f"Failed to read PDF for order extraction: {path.name}. Details: {exc}"
-        ) from exc
-
-    page_texts: list[str] = []
-    for idx, page in enumerate(reader.pages, start=1):
-        try:
-            text = page.extract_text() or ""
-        except Exception as exc:
-            raise ProcessingError(
-                f"Failed to extract text from {path.name}, page {idx}. Details: {exc}"
-            ) from exc
-        page_texts.append(text)
-
-    return page_texts
-
-
-# =========================
-# Validation
-# =========================
 def validate_order_ids_when_needed(pdf_infos: list[PdfInfo]) -> None:
     groups: dict[str, list[PdfInfo]] = defaultdict(list)
     for info in pdf_infos:
         groups[info.logistics_key].append(info)
 
-    duplicated_logistics_groups = {
-        logistics_key: infos
-        for logistics_key, infos in groups.items()
-        if len(infos) > 1
-    }
-
-    if not duplicated_logistics_groups:
+    duplicated_groups = {k: v for k, v in groups.items() if len(v) > 1}
+    if not duplicated_groups:
         return
 
     all_order_ids: list[tuple[str, str, str]] = []
-    for logistics_key, infos in duplicated_logistics_groups.items():
+
+    for logistics_key, infos in duplicated_groups.items():
+        if logistics_key == "familymart":
+            print(
+                "Warning: skipped duplicate order-ID check for FamilyMart PDFs "
+                f"({len(infos)} files)."
+            )
+            continue
+
         patterns = LOGISTICS_RULES[logistics_key]["order_patterns"]
         for info in infos:
             if info.order_ids is None:
-                info.order_ids = extract_order_ids(info.path.name, read_pdf_texts(info.path), patterns)
+                info.order_ids = extract_order_ids(
+                    info.path.name,
+                    read_pdf_texts(info.path),
+                    patterns,
+                )
 
             if len(info.order_ids) != info.page_count:
                 raise ProcessingError(
@@ -268,9 +258,12 @@ def validate_order_ids_when_needed(pdf_infos: list[PdfInfo]) -> None:
             for order_id in info.order_ids:
                 all_order_ids.append((logistics_key, order_id, info.path.name))
 
-    counter = Counter((logistics_key, order_id) for logistics_key, order_id, _ in all_order_ids)
+    if not all_order_ids:
+        return
 
+    counter = Counter((logistics_key, order_id) for logistics_key, order_id, _ in all_order_ids)
     duplicate_map: dict[tuple[str, str], list[str]] = defaultdict(list)
+
     for logistics_key, order_id, filename in all_order_ids:
         key = (logistics_key, order_id)
         if counter[key] > 1:
@@ -279,7 +272,7 @@ def validate_order_ids_when_needed(pdf_infos: list[PdfInfo]) -> None:
     if not duplicate_map:
         return
 
-    lines = []
+    lines: list[str] = []
     for (logistics_key, order_id), filenames in sorted(duplicate_map.items()):
         target_name = LOGISTICS_RULES[logistics_key]["target_name"]
         unique_files = sorted(set(filenames))
@@ -291,9 +284,6 @@ def validate_order_ids_when_needed(pdf_infos: list[PdfInfo]) -> None:
     )
 
 
-# =========================
-# Renaming
-# =========================
 def assign_new_names(pdf_infos: list[PdfInfo]) -> None:
     groups: dict[str, list[PdfInfo]] = defaultdict(list)
     for info in pdf_infos:
@@ -344,9 +334,6 @@ def rename_pdfs(pdf_infos: list[PdfInfo]) -> None:
             ) from exc
 
 
-# =========================
-# RAR creation
-# =========================
 def find_winrar_exe() -> Path:
     candidates = [
         Path(r"C:\Program Files\WinRAR\WinRAR.exe"),
@@ -384,9 +371,8 @@ def build_output_rar_path(output_dir: Path) -> Path:
         index += 1
 
 
-def create_rar(winrar_exe: Path, rar_path: Path, files: Iterable[Path]) -> None:
-    file_list = list(files)
-    if not file_list:
+def create_rar(winrar_exe: Path, rar_path: Path, files: list[Path]) -> None:
+    if not files:
         raise ProcessingError("No renamed PDF files are available for compression.")
 
     cmd = [
@@ -394,7 +380,7 @@ def create_rar(winrar_exe: Path, rar_path: Path, files: Iterable[Path]) -> None:
         "a",
         "-ep",
         str(rar_path),
-        *[str(p) for p in file_list],
+        *[str(p) for p in files],
     ]
 
     try:
@@ -421,10 +407,7 @@ def create_rar(winrar_exe: Path, rar_path: Path, files: Iterable[Path]) -> None:
         )
 
 
-# =========================
-# Cleanup
-# =========================
-def delete_files(files: Iterable[Path]) -> None:
+def delete_files(files: list[Path]) -> None:
     for file_path in files:
         try:
             file_path.unlink()
