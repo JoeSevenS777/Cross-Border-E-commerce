@@ -3,7 +3,7 @@ Option Explicit
 Private Const DATA_FOLDER As String = _
     "C:\\Users\\zouzh\\Downloads"
 
-' Always subtract this offset from Available Stock values (no exemptions)
+' Subtract this offset from Available Stock values for non-Taiwan warehouses only
 ' If you ever need 1,000 instead of 10,000, change this constant.
 Private Const AVAILABLE_STOCK_OFFSET As Double = 10000
 
@@ -255,11 +255,15 @@ Private Sub UpdateOneInventorySheet(ByVal wsInv As Worksheet, _
         End If
     Next r
 
-    ' -------- Always subtract offset from Available Stock (no exemptions) --------
+    ' -------- Subtract offset from Available Stock for non-Taiwan warehouses --------
     For r = 2 To lastRowInv
-        If IsNumeric(wsInv.Cells(r, availColInv).value) Then
-            v = CDbl(wsInv.Cells(r, availColInv).value)
-            wsInv.Cells(r, availColInv).value = v - AVAILABLE_STOCK_OFFSET
+        wh = Trim$(CStr(wsInv.Cells(r, whColInv).value))
+
+        If LCase$(wh) <> "taiwan" Then
+            If IsNumeric(wsInv.Cells(r, availColInv).value) Then
+                v = CDbl(wsInv.Cells(r, availColInv).value)
+                wsInv.Cells(r, availColInv).value = v - AVAILABLE_STOCK_OFFSET
+            End If
         End If
     Next r
 
