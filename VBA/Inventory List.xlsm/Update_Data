@@ -1,7 +1,7 @@
 Option Explicit
 
 Private Const DATA_FOLDER As String = _
-    "C:\Users\zouzh\Downloads"
+    "C:\\Users\\zouzh\\Downloads"
 
 ' Always subtract this offset from Available Stock values (no exemptions)
 ' If you ever need 1,000 instead of 10,000, change this constant.
@@ -18,7 +18,10 @@ Public Sub UpdateInventoryNEW()
 
     Dim latestPath As String
 
+    ' --- Source columns ---
     Dim skuColSrc As Long
+    Dim whColSrc As Long
+    Dim shelfColSrc As Long
     Dim availColSrc As Long
     Dim onwayColSrc As Long
     Dim ordAllocColSrc As Long
@@ -26,12 +29,16 @@ Public Sub UpdateInventoryNEW()
 
     Dim lastRowSrc As Long
     Dim r As Long
-    Dim sku As String
+    Dim SKU As String
+    Dim wh As String
+    Dim k As String
 
+    ' --- Dictionaries keyed by (SKU||Warehouse) ---
     Dim dictAvail As Object
     Dim dictOnWay As Object
     Dim dictOrder As Object
     Dim dictDaily As Object
+    Dim dictShelf As Object
 
     Dim scrn As Boolean
     Dim calc As XlCalculation
@@ -44,8 +51,8 @@ Public Sub UpdateInventoryNEW()
 
     Set wbInv = ThisWorkbook
 
-    ' Added: include sheet 【夹子】
-    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "魔仙", "Flortte", "夹子")
+    ' Sheets to update
+    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "Flortte", "魔仙", "夹子")
 
     ' -------- Speed up --------
     scrn = Application.ScreenUpdating
@@ -75,7 +82,7 @@ Public Sub UpdateInventoryNEW()
     End If
     On Error GoTo ErrHandler
 
-    If wbSrc.Worksheets.Count = 0 Then
+    If wbSrc.Worksheets.count = 0 Then
         MsgBox "最新库存数据文件中没有工作表：" & vbCrLf & latestPath, vbCritical
         GoTo CleanExit
     End If
@@ -84,6 +91,9 @@ Public Sub UpdateInventoryNEW()
 
     ' -------- 2) Source data headers (English / Chinese) --------
     skuColSrc = FindHeaderByCandidates(wsSrc, Array("sku name", "sku编号"))
+    whColSrc = FindHeaderByCandidates(wsSrc, Array("warehouse", "仓库"))
+    shelfColSrc = FindHeaderByCandidates(wsSrc, Array("shelf", "货架位"))
+
     availColSrc = FindHeaderByCandidates(wsSrc, _
                         Array("available for whole warehouse", "整仓可用", _
                               "available stock"))
@@ -94,33 +104,42 @@ Public Sub UpdateInventoryNEW()
     dailySalesColSrc = FindHeaderByCandidates(wsSrc, _
                         Array("forecasted daily sales", "预测日销量"))
 
-    If skuColSrc = 0 Or availColSrc = 0 Or onwayColSrc = 0 _
-       Or ordAllocColSrc = 0 Or dailySalesColSrc = 0 Then
+    If skuColSrc = 0 Or whColSrc = 0 Or shelfColSrc = 0 Or _
+       availColSrc = 0 Or onwayColSrc = 0 Or ordAllocColSrc = 0 Or dailySalesColSrc = 0 Then
+
         MsgBox "在最新库存数据文件中未找到必要表头：" & vbCrLf & _
-               "SKU Name / SKU编号 以及 4 个库存字段。", vbCritical
+               "SKU Name / SKU编号, Warehouse / 仓库, Shelf / 货架位, 以及 4 个库存字段。", vbCritical
         GoTo CleanExit
     End If
 
-    ' -------- 3) Load source data into dictionaries (by SKU) --------
+    ' -------- 3) Load source data into dictionaries (by SKU + Warehouse) --------
     Set dictAvail = CreateObject("Scripting.Dictionary")
     Set dictOnWay = CreateObject("Scripting.Dictionary")
     Set dictOrder = CreateObject("Scripting.Dictionary")
     Set dictDaily = CreateObject("Scripting.Dictionary")
+    Set dictShelf = CreateObject("Scripting.Dictionary")
+
     dictAvail.CompareMode = vbTextCompare
     dictOnWay.CompareMode = vbTextCompare
     dictOrder.CompareMode = vbTextCompare
     dictDaily.CompareMode = vbTextCompare
+    dictShelf.CompareMode = vbTextCompare
 
-    lastRowSrc = wsSrc.Cells(wsSrc.Rows.Count, skuColSrc).End(xlUp).Row
+    lastRowSrc = wsSrc.Cells(wsSrc.Rows.count, skuColSrc).End(xlUp).Row
     If lastRowSrc < 2 Then GoTo CleanExit
 
     For r = 2 To lastRowSrc
-        sku = Trim$(CStr(wsSrc.Cells(r, skuColSrc).Value))
-        If sku <> "" Then
-            dictAvail(sku) = NzToZero(wsSrc.Cells(r, availColSrc).Value)
-            dictOnWay(sku) = NzToZero(wsSrc.Cells(r, onwayColSrc).Value)
-            dictOrder(sku) = NzToZero(wsSrc.Cells(r, ordAllocColSrc).Value)
-            dictDaily(sku) = NzToZero(wsSrc.Cells(r, dailySalesColSrc).Value)
+        SKU = Trim$(CStr(wsSrc.Cells(r, skuColSrc).value))
+        wh = Trim$(CStr(wsSrc.Cells(r, whColSrc).value))
+
+        If SKU <> "" And wh <> "" Then
+            k = MakeKey(SKU, wh)
+
+            dictAvail(k) = NzToZero(wsSrc.Cells(r, availColSrc).value)
+            dictOnWay(k) = NzToZero(wsSrc.Cells(r, onwayColSrc).value)
+            dictOrder(k) = NzToZero(wsSrc.Cells(r, ordAllocColSrc).value)
+            dictDaily(k) = NzToZero(wsSrc.Cells(r, dailySalesColSrc).value)
+            dictShelf(k) = Trim$(CStr(wsSrc.Cells(r, shelfColSrc).value))
         End If
     Next r
 
@@ -132,7 +151,7 @@ Public Sub UpdateInventoryNEW()
         On Error GoTo ErrHandler
 
         If Not wsInv Is Nothing Then
-            UpdateOneInventorySheet wsInv, dictAvail, dictOnWay, dictOrder, dictDaily
+            UpdateOneInventorySheet wsInv, dictAvail, dictOnWay, dictOrder, dictDaily, dictShelf
         End If
     Next i
 
@@ -158,11 +177,16 @@ Private Sub UpdateOneInventorySheet(ByVal wsInv As Worksheet, _
                                    ByVal dictAvail As Object, _
                                    ByVal dictOnWay As Object, _
                                    ByVal dictOrder As Object, _
-                                   ByVal dictDaily As Object)
+                                   ByVal dictDaily As Object, _
+                                   ByVal dictShelf As Object)
 
     Dim invWasProtected As Boolean
 
+    ' --- Inventory columns ---
     Dim skuColInv As Long
+    Dim whColInv As Long
+    Dim shelfColInv As Long
+
     Dim availColInv As Long
     Dim onwayColInv As Long
     Dim ordAllocColInv As Long
@@ -170,7 +194,9 @@ Private Sub UpdateOneInventorySheet(ByVal wsInv As Worksheet, _
 
     Dim lastRowInv As Long
     Dim r As Long
-    Dim sku As String
+    Dim SKU As String
+    Dim wh As String
+    Dim k As String
     Dim v As Double
 
     ' -------- If sheet is protected (no password), temporarily unprotect --------
@@ -181,17 +207,21 @@ Private Sub UpdateOneInventorySheet(ByVal wsInv As Worksheet, _
         On Error GoTo 0
     End If
 
-    ' -------- Headers (SKU + 4 columns) --------
+    ' -------- Headers --------
     skuColInv = FindHeaderByCandidates(wsInv, Array("sku"))
+    whColInv = FindHeaderByCandidates(wsInv, Array("warehouse"))
+    shelfColInv = FindHeaderByCandidates(wsInv, Array("shelf"))
+
     availColInv = FindHeaderByCandidates(wsInv, Array("available stock"))
     onwayColInv = FindHeaderByCandidates(wsInv, Array("on the way"))
     ordAllocColInv = FindHeaderByCandidates(wsInv, Array("order allocated"))
     dailySalesColInv = FindHeaderByCandidates(wsInv, Array("daily sales"))
 
-    If skuColInv = 0 Or availColInv = 0 Or onwayColInv = 0 _
-       Or ordAllocColInv = 0 Or dailySalesColInv = 0 Then
+    If skuColInv = 0 Or whColInv = 0 Or shelfColInv = 0 Or _
+       availColInv = 0 Or onwayColInv = 0 Or ordAllocColInv = 0 Or dailySalesColInv = 0 Then
+
         MsgBox "在工作表 [" & wsInv.Name & "] 中未找到必要表头：" & vbCrLf & _
-               "SKU / Available Stock / on the way / Order Allocated / Daily Sales", vbCritical
+               "SKU / Warehouse / Shelf / Available Stock / On the way / Order Allocated / Daily Sales", vbCritical
         GoTo SheetCleanExit
     End If
 
@@ -199,31 +229,37 @@ Private Sub UpdateOneInventorySheet(ByVal wsInv As Worksheet, _
     EnsureUpdateButton wsInv, skuColInv
 
     ' -------- Determine range --------
-    lastRowInv = wsInv.Cells(wsInv.Rows.Count, skuColInv).End(xlUp).Row
+    lastRowInv = wsInv.Cells(wsInv.Rows.count, skuColInv).End(xlUp).Row
     If lastRowInv < 2 Then GoTo SheetCleanExit
 
     ' -------- Clear old values --------
+    wsInv.Range(wsInv.Cells(2, shelfColInv), wsInv.Cells(lastRowInv, shelfColInv)).ClearContents
     wsInv.Range(wsInv.Cells(2, availColInv), wsInv.Cells(lastRowInv, availColInv)).ClearContents
     wsInv.Range(wsInv.Cells(2, onwayColInv), wsInv.Cells(lastRowInv, onwayColInv)).ClearContents
     wsInv.Range(wsInv.Cells(2, ordAllocColInv), wsInv.Cells(lastRowInv, ordAllocColInv)).ClearContents
     wsInv.Range(wsInv.Cells(2, dailySalesColInv), wsInv.Cells(lastRowInv, dailySalesColInv)).ClearContents
 
-    ' -------- Fill columns by SKU --------
+    ' -------- Fill columns by (SKU + Warehouse) --------
     For r = 2 To lastRowInv
-        sku = Trim$(CStr(wsInv.Cells(r, skuColInv).Value))
-        If sku <> "" Then
-            If dictAvail.Exists(sku) Then wsInv.Cells(r, availColInv).Value = dictAvail(sku)
-            If dictOnWay.Exists(sku) Then wsInv.Cells(r, onwayColInv).Value = dictOnWay(sku)
-            If dictOrder.Exists(sku) Then wsInv.Cells(r, ordAllocColInv).Value = dictOrder(sku)
-            If dictDaily.Exists(sku) Then wsInv.Cells(r, dailySalesColInv).Value = dictDaily(sku)
+        SKU = Trim$(CStr(wsInv.Cells(r, skuColInv).value))
+        wh = Trim$(CStr(wsInv.Cells(r, whColInv).value))
+
+        If SKU <> "" And wh <> "" Then
+            k = MakeKey(SKU, wh)
+
+            If dictShelf.Exists(k) Then wsInv.Cells(r, shelfColInv).value = dictShelf(k)
+            If dictAvail.Exists(k) Then wsInv.Cells(r, availColInv).value = dictAvail(k)
+            If dictOnWay.Exists(k) Then wsInv.Cells(r, onwayColInv).value = dictOnWay(k)
+            If dictOrder.Exists(k) Then wsInv.Cells(r, ordAllocColInv).value = dictOrder(k)
+            If dictDaily.Exists(k) Then wsInv.Cells(r, dailySalesColInv).value = dictDaily(k)
         End If
     Next r
 
     ' -------- Always subtract offset from Available Stock (no exemptions) --------
     For r = 2 To lastRowInv
-        If IsNumeric(wsInv.Cells(r, availColInv).Value) Then
-            v = CDbl(wsInv.Cells(r, availColInv).Value)
-            wsInv.Cells(r, availColInv).Value = v - AVAILABLE_STOCK_OFFSET
+        If IsNumeric(wsInv.Cells(r, availColInv).value) Then
+            v = CDbl(wsInv.Cells(r, availColInv).value)
+            wsInv.Cells(r, availColInv).value = v - AVAILABLE_STOCK_OFFSET
         End If
     Next r
 
@@ -282,6 +318,11 @@ End Sub
 
 ' ===== Helpers =======================================================
 
+' Build a stable composite key (SKU + Warehouse)
+Private Function MakeKey(ByVal SKU As String, ByVal warehouse As String) As String
+    MakeKey = Trim$(SKU) & "||" & Trim$(warehouse)
+End Function
+
 ' Find the latest modified .xlsx workbook in a folder
 ' whose name starts with "Inventory_List" or "库存清单"
 Private Function FindLatestWorkbook(ByVal folderPath As String) As String
@@ -294,7 +335,7 @@ Private Function FindLatestWorkbook(ByVal folderPath As String) As String
     latestTime = 0
 
     ' Ensure trailing path separator
-    If Right$(folderPath, 1) <> "\" And Right$(folderPath, 1) <> "/" Then
+    If Right$(folderPath, 1) <> "\\" And Right$(folderPath, 1) <> "/" Then
         folderPath = folderPath & Application.PathSeparator
     End If
 
@@ -351,10 +392,10 @@ Private Function FindHeaderByCandidates(ByVal ws As Worksheet, _
     Dim normCell As String
     Dim normCand As String
 
-    lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    lastCol = ws.Cells(1, ws.Columns.count).End(xlToLeft).Column
 
     For c = 1 To lastCol
-        normCell = NormalizeHeader(ws.Cells(1, c).Value)
+        normCell = NormalizeHeader(ws.Cells(1, c).value)
         If normCell <> "" Then
             For i = LBound(candidates) To UBound(candidates)
                 normCand = NormalizeHeader(candidates(i))
