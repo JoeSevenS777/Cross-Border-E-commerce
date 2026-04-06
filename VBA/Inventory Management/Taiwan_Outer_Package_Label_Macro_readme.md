@@ -12,56 +12,62 @@ Automated outer-package label printing for exported packing workbooks in Excel.
 
 ---
 
-## 🔄 Current Version Summary
+## Current Version Summary
 
-This version is the **active-workbook print-preview edition** of the Taiwan outer-package label macro.
+This version is the active-workbook print-preview edition of the Taiwan outer-package label macro.
 
-It now supports:
+It currently supports:
 
-- **dynamic header detection**
-- **selection-based processing**
-- **whole-column smart selection**
-- **strict row validation**
-- **box-based grouping**
-- **per-box page numbering**
-- **14 detail rows per page**
-- **warehouse shelf shown in a dedicated right column**
-- **PrintPreview output before printing**
+- dynamic header detection
+- selection-based processing
+- whole-column smart selection
+- strict row validation
+- box-based grouping
+- per-box page numbering
+- 14 detail rows per page
+- dedicated columns for shelf, SKU, and quantity
+- PrintPreview output before printing
 
 ---
 
-## ✅ Confirmed Layout Behavior
+## Confirmed Layout Behavior
 
-The generated label now follows the target layout in the workbook sample sheet:
+The generated label now follows this 3-column layout:
 
 ### Row 1
-- Left: `美妝補貨`
-- Right: page text such as `第1頁/共5頁`
+- `A:B` merged: `美妝補貨`
+- `C`: `箱號: 01`
 
 ### Row 2
-- Left: `SKU總數： 62`
-- Right: `箱號: 02`
+- `A:B` merged: `SKU總數： 2`
+- `C`: `第1頁/共1頁`
 
 ### Row 3
-- Left: `明細SKU * 數量↓`
-- Right: `貨架位↓`
+- `A`: `貨架位↓`
+- `B`: `明細SKU ↓`
+- `C`: `數量↓`
 
 ### Rows 4+
-- Column A: `SKU * 數量`
-- Column B: `貨架位`
+- Column A: shelf location
+- Column B: SKU
+- Column C: quantity
 
-### Formatting Notes
-- Font family: **Microsoft JhengHei**
-- Page text font size: **8**
-- `箱號:` stays on **one line**
-- WrapText is disabled for label cells
-- Column B is used as a dedicated right-side shelf column
+### Current formatting notes
+- font family: **Microsoft JhengHei**
+- title font size: **16**
+- box number font size: **12**
+- page info font size: **8**
+- header row font size: **13**
+- detail row font size: **12**
+- WrapText is disabled
+- page numbering is centered in column C row 2
+- box number is centered in column C row 1
 
 ---
 
-## 🔍 Header Detection Rules
+## Header Detection Rules
 
-The macro does **not** rely on fixed column positions.
+The macro does not rely on fixed column positions.
 
 | Field | Accepted Header |
 | --- | --- |
@@ -71,23 +77,23 @@ The macro does **not** rely on fixed column positions.
 | Shelf | `台湾货架位` |
 
 ### Important
-For the current version, shelf location is detected **only** by:
+For the current version, shelf location is detected only by:
 
 - `台湾货架位`
 
-It does **not** search for `货架位`.
+It does not search for `货架位`.
 
 ---
 
-## 🧠 Selection Logic
+## Selection Logic
 
-When selecting cells in the **箱号 column**:
+When selecting cells in the box-number column:
 
 ### Case A — Normal selection
 - Only the selected non-empty 箱号 rows are processed
 
 ### Case B — Whole column selection
-- Treated as **all non-empty 箱号 rows within the data range**
+- Treated as all non-empty 箱号 rows within the data range
 - Empty rows are ignored automatically
 
 This matches the real workflow:
@@ -96,7 +102,7 @@ This matches the real workflow:
 
 ---
 
-## ✅ Validation Rules
+## Validation Rules
 
 Validation is applied only to the rows actually being processed.
 
@@ -121,7 +127,7 @@ Validation is applied only to the rows actually being processed.
 
 ---
 
-## 📦 Box-Based Output Logic
+## Box-Based Output Logic
 
 ### 1. Grouping
 Rows are grouped by **箱号**.
@@ -137,7 +143,7 @@ Numeric box numbers are normalized like:
 - `3` → `03`
 
 ### 4. Per-box page numbering
-Page numbering is calculated **inside each box**, not across all boxes.
+Page numbering is calculated inside each box, not across all boxes.
 
 #### Example
 If box `01` has only 1 page:
@@ -152,7 +158,7 @@ If box `02` has 5 pages:
 
 ---
 
-## 📄 Pagination Rules
+## Pagination Rules
 
 ### Detail rows per page
 The current version uses:
@@ -162,38 +168,55 @@ The current version uses:
 ### Important pagination behavior
 - page numbering resets for each box
 - total pages are calculated per box
-- there is **no blank spacer row between pages**
-- this avoids the earlier issue where every content page was followed by an empty print page
+- there is no blank spacer row between pages
+- the earlier blank-page issue has been corrected by removing the page gap
 
 ---
 
-## 🧾 Label Example
+## Label Example
 
 ```text
-美妝補貨                          第1頁/共2頁
-SKU總數： 2                      箱號: 01
+美妝補貨                          箱號: 01
+SKU總數： 2                      第1頁/共1頁
 
-明細SKU * 數量↓                  貨架位↓
-MJ-AAA * 30                      F-05-01
-MJ-BBB * 10                      F-05-02
+貨架位↓      明細SKU ↓            數量↓
+D-04-04      MJ-萌睫尚品-MJ3D      10
+F-05-04      JZ-夹子收纳盒         50
 ```
 
 ---
 
-## 🧩 Workflow
+## Workflow
 
 1. Open the exported packing workbook
 2. Activate the data sheet
-3. Select cells in the **箱号** column  
+3. Select cells in the **箱号** column
    - or select the whole 箱号 column
 4. Run the macro
 5. Validation runs on the applicable rows
 6. Labels are generated into `PrintPreview`
-7. Excel opens **Print Preview**
+7. Excel opens Print Preview
 
 ---
 
-## ⚠️ Error Handling Summary
+## Current Layout Constants
+
+The current VBA version uses these layout settings:
+
+| Setting | Value |
+| --- | --- |
+| rows per page | `14` |
+| page gap | `0` |
+| column A width | `9.2` |
+| column B width | `37` |
+| column C width | `8.15` |
+| title / SKU-total row height | `24` |
+| header row height | `22.1` |
+| detail row height | `20.05` |
+
+---
+
+## Error Handling Summary
 
 | Scenario | Behavior |
 | --- | --- |
@@ -205,33 +228,35 @@ MJ-BBB * 10                      F-05-02
 
 ---
 
-## 📌 Current Status
+## Current Status
 
-**Working (Per-Box Pagination Layout Version)**
+**Working (3-Column Shelf-SKU-Qty Layout Version)**
 
-This version has been tested and adjusted to solve:
+This version has been adjusted to support:
 
-- layout matching to the sample sheet
-- title/header placement
+- 3-column layout
+- `貨架位 | 明細SKU | 數量`
+- `箱號` shown in row 1
+- page info shown in row 2
 - per-box page numbering
 - 14-row page capacity
-- empty-page issue caused by spacer rows between page blocks
+- no empty spacer row between page blocks
 
 ---
 
-## 🧠 Practical Assessment
+## Practical Assessment
 
 For current warehouse use, this version is:
 
-- **usable**
-- **stable enough for daily operation**
-- **not yet deeply refactored**
+- usable
+- stable enough for daily operation
+- not yet deeply refactored
 
 That means it is suitable for real work, but still has room for code cleanup and structural improvement.
 
 ---
 
-## 🚀 Recommended Next Upgrade
+## Recommended Next Upgrade
 
 Recommended future improvements:
 
@@ -243,9 +268,9 @@ Recommended future improvements:
 
 ---
 
-## 📎 Reference
+## Reference
 
-Updated from the earlier README provided by the user.
+Updated according to the current canvas VBA script and latest user-confirmed layout.
 
 ---
 
