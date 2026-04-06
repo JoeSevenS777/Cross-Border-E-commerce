@@ -13,7 +13,11 @@ Private Function BoxLabel_Text_SKUCount() As String
 End Function
 
 Private Function BoxLabel_Text_DetailHeader_Left() As String
-    BoxLabel_Text_DetailHeader_Left = ChrW(&H660E) & ChrW(&H7D30) & "SKU * " & ChrW(&H6578) & ChrW(&H91CF) & ChrW(&H2193)
+    BoxLabel_Text_DetailHeader_Left = ChrW(&H660E) & ChrW(&H7D30) & "SKU " & ChrW(&H2193)
+End Function
+
+Private Function BoxLabel_Text_QtyHeader() As String
+    BoxLabel_Text_QtyHeader = ChrW(&H6578) & ChrW(&H91CF) & ChrW(&H2193)
 End Function
 
 Private Function BoxLabel_Text_DetailHeader_Right() As String
@@ -23,24 +27,6 @@ End Function
 Private Function BoxLabel_Text_PageInfo(ByVal currentPage As Long, ByVal totalPages As Long) As String
     BoxLabel_Text_PageInfo = ChrW(&H7B2C) & currentPage & ChrW(&H9801) & "/" & ChrW(&H5171) & totalPages & ChrW(&H9801)
 End Function
-
-Private Sub ApplyCJKFont_Box(ByVal ws As Worksheet)
-    On Error Resume Next
-    ws.Cells.Font.Name = "Microsoft JhengHei"
-    If Err.Number <> 0 Then
-        Err.Clear
-        ws.Cells.Font.Name = "Microsoft YaHei UI"
-    End If
-    If Err.Number <> 0 Then
-        Err.Clear
-        ws.Cells.Font.Name = "PMingLiU"
-    End If
-    If Err.Number <> 0 Then
-        Err.Clear
-        ws.Cells.Font.Name = "SimSun"
-    End If
-    On Error GoTo 0
-End Sub
 
 Private Function NormalizeBoxNo(ByVal v As Variant) As String
     Dim s As String
@@ -157,7 +143,7 @@ Private Function PagesNeeded(ByVal itemCount As Long, ByVal rowsPerPage As Long)
 End Function
 
 Private Sub FormatLabelPage(ByVal ws As Worksheet, ByVal pageTop As Long, ByVal detailLastRow As Long)
-    With ws.Range("A" & pageTop & ":B" & detailLastRow)
+    With ws.Range("A" & pageTop & ":C" & detailLastRow)
         .Font.Name = "Microsoft JhengHei"
         .VerticalAlignment = xlCenter
         .WrapText = False
@@ -169,35 +155,40 @@ Private Sub FormatLabelPage(ByVal ws As Worksheet, ByVal pageTop As Long, ByVal 
     ws.Rows(pageTop + 1).RowHeight = 24
     ws.Rows(pageTop + 2).RowHeight = 22.1
 
-    With ws.Range("A" & pageTop)
+    With ws.Range("A" & pageTop & ":B" & pageTop)
+        .Merge
         .Font.Bold = True
         .Font.Size = 16
         .HorizontalAlignment = xlCenter
     End With
 
-    With ws.Range("B" & pageTop)
-        .Font.Bold = False
-        .Font.Size = 8
-        .HorizontalAlignment = xlRight
+    With ws.Range("C" & pageTop)
+        .Font.Bold = True
+        .Font.Size = 12
+        .HorizontalAlignment = xlCenter
     End With
 
     With ws.Range("A" & (pageTop + 1) & ":B" & (pageTop + 1))
+        .Merge
         .Font.Bold = True
         .Font.Size = 16
         .HorizontalAlignment = xlCenter
     End With
 
-    With ws.Range("A" & (pageTop + 2))
-        .Font.Bold = True
-        .Font.Size = 13
-        .HorizontalAlignment = xlLeft
+    With ws.Range("C" & (pageTop + 1))
+        .Font.Bold = False
+        .Font.Size = 8
+        .HorizontalAlignment = xlCenter
     End With
 
-    With ws.Range("B" & (pageTop + 2))
+    With ws.Range("A" & (pageTop + 2) & ":C" & (pageTop + 2))
         .Font.Bold = True
         .Font.Size = 13
         .HorizontalAlignment = xlCenter
     End With
+
+    ws.Range("A" & (pageTop + 2)).HorizontalAlignment = xlLeft
+    ws.Range("B" & (pageTop + 2)).HorizontalAlignment = xlLeft
 
     If detailLastRow >= pageTop + 3 Then
         With ws.Range("A" & (pageTop + 3) & ":A" & detailLastRow)
@@ -207,6 +198,12 @@ Private Sub FormatLabelPage(ByVal ws As Worksheet, ByVal pageTop As Long, ByVal 
         End With
 
         With ws.Range("B" & (pageTop + 3) & ":B" & detailLastRow)
+            .Font.Bold = False
+            .Font.Size = 12
+            .HorizontalAlignment = xlLeft
+        End With
+
+        With ws.Range("C" & (pageTop + 3) & ":C" & detailLastRow)
             .Font.Bold = False
             .Font.Size = 12
             .HorizontalAlignment = xlCenter
@@ -304,9 +301,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
     If IsWholeBoxColumnSelected(sel, boxCol) Then
         For rowNum = HEADER_ROW + 1 To lastDataRow
             boxNo = NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value)
-            If boxNo <> "" Then
-                AddUniqueBox selectedBoxes, boxNo
-            End If
+            If boxNo <> "" Then AddUniqueBox selectedBoxes, boxNo
         Next rowNum
     Else
         For Each area In sel.Areas
@@ -315,9 +310,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
                 If rowNum >= HEADER_ROW + 1 And rowNum <= lastDataRow Then
                     If cell.Column = boxCol Then
                         boxNo = NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value)
-                        If boxNo <> "" Then
-                            AddUniqueBox selectedBoxes, boxNo
-                        End If
+                        If boxNo <> "" Then AddUniqueBox selectedBoxes, boxNo
                     End If
                 End If
             Next cell
@@ -341,12 +334,10 @@ Public Sub PrintSelectedBoxLabelsPreview()
                     MsgBox "SKU编号 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                     Exit Sub
                 End If
-
                 If Trim$(CStr(qtyVal)) = "" Then
                     MsgBox "实发数量 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                     Exit Sub
                 End If
-
                 If Not IsNumeric(qtyVal) Then
                     MsgBox "实发数量 非数字（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                     Exit Sub
@@ -358,12 +349,10 @@ Public Sub PrintSelectedBoxLabelsPreview()
                     MsgBox "实发数量 <= 0（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                     Exit Sub
                 End If
-
                 If qtyNum <> Int(qtyNum) Then
                     MsgBox "实发数量 不是整数（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                     Exit Sub
                 End If
-
                 If shelfVal = "" Then
                     MsgBox "台湾货架位 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                     Exit Sub
@@ -377,7 +366,6 @@ Public Sub PrintSelectedBoxLabelsPreview()
                 If rowNum >= HEADER_ROW + 1 And rowNum <= lastDataRow Then
                     If cell.Column = boxCol Then
                         boxNo = NormalizeBoxNo(wsData.Cells(rowNum, boxCol).Value)
-
                         If boxNo <> "" Then
                             skuVal = Trim$(CStr(wsData.Cells(rowNum, skuCol).Value))
                             qtyVal = wsData.Cells(rowNum, qtyCol).Value
@@ -387,12 +375,10 @@ Public Sub PrintSelectedBoxLabelsPreview()
                                 MsgBox "SKU编号 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                                 Exit Sub
                             End If
-
                             If Trim$(CStr(qtyVal)) = "" Then
                                 MsgBox "实发数量 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                                 Exit Sub
                             End If
-
                             If Not IsNumeric(qtyVal) Then
                                 MsgBox "实发数量 非数字（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                                 Exit Sub
@@ -404,12 +390,10 @@ Public Sub PrintSelectedBoxLabelsPreview()
                                 MsgBox "实发数量 <= 0（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                                 Exit Sub
                             End If
-
                             If qtyNum <> Int(qtyNum) Then
                                 MsgBox "实发数量 不是整数（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                                 Exit Sub
                             End If
-
                             If shelfVal = "" Then
                                 MsgBox "台湾货架位 为空（行 " & rowNum & "，箱号 " & boxNo & "）。请修正后再打印。", vbExclamation
                                 Exit Sub
@@ -423,6 +407,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
 
     ReDim boxList(1 To selectedBoxes.Count)
     ReDim lineTexts(1 To selectedBoxes.Count)
+
     For i = 1 To selectedBoxes.Count
         boxList(i) = CStr(selectedBoxes(i))
         Set lineTexts(i) = New Collection
@@ -442,7 +427,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
                 If skuText <> "" And qtyText <> "" And shelfText <> "" Then
                     If IsNumeric(qtyText) Then
                         If CDbl(qtyText) > 0 And CDbl(qtyText) = Int(CDbl(qtyText)) Then
-                            lineTexts(boxIdx).Add Array(skuText & " * " & qtyText, shelfText)
+                            lineTexts(boxIdx).Add Array(skuText, qtyText, shelfText)
                         End If
                     End If
                 End If
@@ -450,15 +435,14 @@ Public Sub PrintSelectedBoxLabelsPreview()
         End If
     Next rowNum
 
-    
-
     Application.ScreenUpdating = False
 
     wsLabel.Cells.Clear
     wsLabel.ResetAllPageBreaks
 
-    wsLabel.Columns("A").ColumnWidth = 42.57
-    wsLabel.Columns("B").ColumnWidth = 12.57
+    wsLabel.Columns("A").ColumnWidth = 9.2
+    wsLabel.Columns("B").ColumnWidth = 37
+    wsLabel.Columns("C").ColumnWidth = 8.15
 
     With wsLabel.PageSetup
         On Error Resume Next
@@ -486,6 +470,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
             j = 1
             boxPageNo = 0
             boxTotalPages = PagesNeeded(c.Count, ROWS_PER_PAGE)
+
             Do While j <= c.Count
                 pageIndex = pageIndex + 1
                 boxPageNo = boxPageNo + 1
@@ -497,21 +482,26 @@ Public Sub PrintSelectedBoxLabelsPreview()
                     wsLabel.HPageBreaks.Add Before:=wsLabel.Rows(pageTop)
                 End If
 
+                wsLabel.Range("A" & pageTop & ":B" & pageTop).UnMerge
+                wsLabel.Range("A" & (pageTop + 1) & ":B" & (pageTop + 1)).UnMerge
+
                 wsLabel.Range("A" & pageTop).Value = BoxLabel_Text_Title()
-                wsLabel.Range("B" & pageTop).Value = BoxLabel_Text_PageInfo(boxPageNo, boxTotalPages)
+                wsLabel.Range("C" & pageTop).Value = BoxLabel_Text_BoxNo() & " " & boxList(i)
 
                 wsLabel.Range("A" & (pageTop + 1)).Value = BoxLabel_Text_SKUCount() & " " & c.Count
-                wsLabel.Range("B" & (pageTop + 1)).Value = BoxLabel_Text_BoxNo() & " " & boxList(i)
+                wsLabel.Range("C" & (pageTop + 1)).Value = BoxLabel_Text_PageInfo(boxPageNo, boxTotalPages)
 
-                wsLabel.Range("A" & (pageTop + 2)).Value = BoxLabel_Text_DetailHeader_Left()
-                wsLabel.Range("B" & (pageTop + 2)).Value = BoxLabel_Text_DetailHeader_Right()
+                wsLabel.Range("A" & (pageTop + 2)).Value = BoxLabel_Text_DetailHeader_Right()
+                wsLabel.Range("B" & (pageTop + 2)).Value = BoxLabel_Text_DetailHeader_Left()
+                wsLabel.Range("C" & (pageTop + 2)).Value = BoxLabel_Text_QtyHeader()
 
                 lineRow = pageTop + 3
                 lineCount = 0
 
                 Do While j <= c.Count And lineCount < ROWS_PER_PAGE
-                    wsLabel.Range("A" & lineRow).Value = CStr(c(j)(0))
-                    wsLabel.Range("B" & lineRow).Value = CStr(c(j)(1))
+                    wsLabel.Range("A" & lineRow).Value = CStr(c(j)(2))
+                    wsLabel.Range("B" & lineRow).Value = CStr(c(j)(0))
+                    wsLabel.Range("C" & lineRow).Value = CStr(c(j)(1))
                     wsLabel.Rows(lineRow).RowHeight = 20.05
                     lineRow = lineRow + 1
                     lineCount = lineCount + 1
@@ -525,17 +515,14 @@ Public Sub PrintSelectedBoxLabelsPreview()
         End If
     Next i
 
-    ApplyCJKFont_Box wsLabel
-
     If pageIndex = 0 Then
         Application.ScreenUpdating = True
         MsgBox "No valid packed rows were found for the selected 箱號 / 箱号.", vbExclamation
         Exit Sub
     End If
 
-    wsLabel.PageSetup.PrintArea = wsLabel.Range("A1:B" & totalLastRow).Address
+    wsLabel.PageSetup.PrintArea = wsLabel.Range("A1:C" & totalLastRow).Address
 
     Application.ScreenUpdating = True
     wsLabel.PrintPreview
 End Sub
-
