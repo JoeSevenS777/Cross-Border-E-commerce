@@ -5,6 +5,7 @@
 ![Input](https://img.shields.io/badge/Input-PDF-red?logo=adobeacrobatreader&logoColor=white)
 ![Archive](https://img.shields.io/badge/Archive-WinRAR-orange)
 ![Encoding](https://img.shields.io/badge/Encoding-UTF--8-green)
+![Mode](https://img.shields.io/badge/Mode-预刷-purple)
 ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
 > **Detect Logistics → Count Labels → Rename PDFs → Archive to RAR → Clean Up**  
@@ -22,8 +23,9 @@ It will:
 2. Count how many labels are inside each PDF
 3. Rename each PDF using a fixed naming rule
 4. Pack the renamed PDFs into one dated `.rar` archive
-5. Save the archive into `Downloads`
-6. Delete the processed PDF files after successful compression
+5. Name the archive using the **total label count of the current run**
+6. Save the archive into `Downloads`
+7. Delete the processed PDF files after successful compression
 
 The workflow is intended to be simple, repeatable, and suitable for daily use.
 
@@ -68,26 +70,66 @@ If there are multiple PDFs of the same logistics type, suffixes are added automa
 
 ## Archive Naming Rule
 
-After all PDFs are renamed, they are packed into one RAR file named:
+After all PDFs are renamed, they are packed into one RAR file.
+
+The archive name is based on:
+
+- **today's date**
+- fixed base name **`三得美（预刷）`**
+- **the total label count of all PDFs in the current run**
+- optional **batch suffix** when more than one batch is processed on the same day
+
+### First batch of the day
 
 ```text
-yyyymmdd三得美.rar
+yyyymmdd三得美（预刷）-总单数单.rar
 ```
 
 Example:
 
 ```text
-20260403三得美.rar
+20260408三得美（预刷）-179单.rar
 ```
 
-If a file with the same name already exists in `Downloads`, the script creates:
+### Second batch of the same day
 
 ```text
-20260403三得美(2).rar
-20260403三得美(3).rar
+yyyymmdd三得美（预刷）-总单数单（第二批）.rar
 ```
 
-and so on.
+Example:
+
+```text
+20260408三得美（预刷）-24单（第二批）.rar
+```
+
+### Third batch of the same day
+
+```text
+yyyymmdd三得美（预刷）-总单数单（第三批）.rar
+```
+
+Example:
+
+```text
+20260408三得美（预刷）-31单（第三批）.rar
+```
+
+### Batch detection rule
+
+The script checks whether any same-day archive already exists with the same date and base family:
+
+```text
+yyyymmdd三得美（预刷）-
+```
+
+This check ignores the quantity of `单`.
+
+So if `20260408三得美（预刷）-179单.rar` already exists, and a later run has only 24 labels, the new archive will still be:
+
+```text
+20260408三得美（预刷）-24单（第二批）.rar
+```
 
 ---
 
@@ -129,7 +171,7 @@ Place these files together in one folder:
 ```text
 your_folder/
 │
-├─ logistics_pdf_renamer_and_rar_clean.py
+├─ logistics_pdf_renamer_and_rar.py
 ├─ run_logistics_pdf_renamer.bat
 │
 ├─ 711_labels.pdf
@@ -147,6 +189,7 @@ The script identifies them by **content**, not by filename.
 For each `.pdf` in the script folder:
 
 ### 1. PDF Detection
+
 The script reads text from the PDF and decides whether it is:
 
 - `711`
@@ -154,6 +197,7 @@ The script reads text from the PDF and decides whether it is:
 - `全家`
 
 ### 2. Label Counting
+
 The script treats:
 
 ```text
@@ -163,18 +207,28 @@ The script treats:
 So the number of pages becomes the number of labels.
 
 ### 3. Duplicate Validation
+
 If there are multiple PDFs of the same logistics type:
 
 - `711` and `店到店` are checked for duplicated `訂單編號`
 - `全家` is skipped intentionally
 
 ### 4. Rename
+
 Each PDF is renamed according to logistics type and page count.
 
-### 5. Archive
+### 5. Calculate batch total
+
+The script sums the page counts from **all PDFs in the current run**.
+
+This total is used in the final RAR filename.
+
+### 6. Archive
+
 The script uses **WinRAR** to create a `.rar` archive.
 
-### 6. Cleanup
+### 7. Cleanup
+
 Only after the RAR is created successfully, the processed PDFs are deleted.
 
 ---
@@ -271,6 +325,7 @@ If something looks wrong:
 - Are the PDFs closed?
 - Are the PDFs really one of the 3 supported logistics types?
 - If there are multiple FamilyMart PDFs, remember that duplicate checking is skipped intentionally
+- Is there already a same-day RAR batch in `Downloads`?
 
 ---
 
