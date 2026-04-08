@@ -7,8 +7,8 @@
 ![Mode](https://img.shields.io/badge/Mode-现货-purple)
 ![Status](https://img.shields.io/badge/Status-Stable-brightgreen)
 
-> **Detect Logistics → Count Only Logistics Labels → Create No-Pick Copy → Archive to RAR → Clean Up**  
-> Built for mixed logistics PDFs where one logistics label may be followed by one or more pick-label pages.
+> **Detect Logistics → Count Only Real Logistics Labels → Create No-Pick Copy → Archive to RAR → Clean Up**  
+> Built for mixed logistics PDFs where one logistics label may be followed by one or more pick-label pages, including multi-page pick lists.
 
 ---
 
@@ -19,14 +19,15 @@ This script processes **instock / 现货** logistics PDFs.
 It will:
 
 1. Detect the logistics type of each PDF
-2. Detect which pages are **logistics labels**
-3. Ignore **pick-label pages** and **empty pages**
-4. Rename the original PDF by the count of logistics labels
+2. Detect which pages are **real logistics labels**
+3. Ignore **pick-label pages**, **pick-label continuation pages**, and **empty pages**
+4. Rename the original PDF by the count of real logistics labels
 5. Create a second PDF that keeps **only logistics-label pages**
 6. Rename that second PDF with the suffix `"(无拣货单)"`
 7. Pack all generated PDFs into one dated `.rar` archive
-8. Save the archive into `Downloads`
-9. Delete the processed PDFs after successful compression
+8. Name the archive by the **total logistics-label count of the whole batch**
+9. Save the archive into `Downloads`
+10. Delete the processed PDFs after successful compression
 
 ---
 
@@ -53,18 +54,22 @@ That is because a PDF may contain:
 - 1 logistics label page
 - followed by 1 pick-label page
 - or 2 pick-label pages
-- or 3+ pick-label pages
+- or a pick-label table that spills into another page
 - and sometimes even empty pages
 
 So page count is not reliable.
 
-Instead, the script classifies each page as:
+Instead, the script uses **sequence-aware page classification** and counts only the **real logistics-label pages**.
+
+It can now distinguish between:
 
 - **logistics label**
 - **pick label**
+- **pick continuation**
 - **empty page**
+- **unknown page**
 
-Then it counts only the **logistics-label pages**.
+This is specifically designed to avoid over-counting when a pick list is split across multiple pages.
 
 ---
 
@@ -93,6 +98,7 @@ Examples:
 A second PDF is created that removes:
 
 - all pick-label pages
+- all pick-label continuation pages
 - all empty pages
 
 It is renamed to:
@@ -126,26 +132,66 @@ If multiple PDFs map to the same target name, suffixes are added automatically:
 
 ## Archive Naming Rule
 
-After processing, all generated PDFs are packed into one RAR archive named:
+After processing, all generated PDFs are packed into one RAR archive.
+
+The archive name is based on:
+
+- **today's date**
+- fixed base name **`三得美（现货）`**
+- **the total count of all real logistics labels in the current run**
+- optional **batch suffix** when more than one batch is processed on the same day
+
+### First batch of the day
 
 ```text
-yyyymmdd三得美（现货）.rar
+yyyymmdd三得美（现货）-总单数单.rar
 ```
 
 Example:
 
 ```text
-20260403三得美（现货）.rar
+20260408三得美（现货）-4单.rar
 ```
 
-If the same-day archive already exists in `Downloads`, the script creates:
+### Second batch of the same day
 
 ```text
-20260403三得美（现货）(2).rar
-20260403三得美（现货）(3).rar
+yyyymmdd三得美（现货）-总单数单（第二批）.rar
 ```
 
-and so on.
+Example:
+
+```text
+20260408三得美（现货）-2单（第二批）.rar
+```
+
+### Third batch of the same day
+
+```text
+yyyymmdd三得美（现货）-总单数单（第三批）.rar
+```
+
+Example:
+
+```text
+20260408三得美（现货）-4单（第三批）.rar
+```
+
+### Batch detection rule
+
+The script checks whether any same-day archive already exists with the same date and base family:
+
+```text
+yyyymmdd三得美（现货）-
+```
+
+This check ignores the quantity of `单`.
+
+So if `20260408三得美（现货）-4单.rar` already exists, and a later run has only 2 orders, the new archive will still be:
+
+```text
+20260408三得美（现货）-2单（第二批）.rar
+```
 
 ---
 
@@ -161,29 +207,47 @@ C:\Users\zouzh\Downloads\
 
 ## Page Classification Logic
 
-The script classifies every page using text patterns.
+The script classifies every page using text patterns **and page order context**.
 
-### Pick-label pages
+### 1. Logistics-label pages
+
+Pages matching carrier-specific shipping-label features are treated as logistics pages.
+
+These are the **anchor pages** used for counting real orders.
+
+### 2. Pick-label pages
+
 Usually contain markers like:
 
 - `Order No:`
 - `Tracking No:`
 - `Total Items:`
 - `货架位`
+- `數量`
 - `数量`
 
-### Empty pages
+### 3. Pick-continuation pages
+
+Some pick lists continue onto the next page and may no longer contain the usual header markers.
+
+These continuation pages are detected by features such as:
+
+- repeated shelf-location row patterns like `E-05-01`
+- item-table row structure
+- previous page being a pick page or another continuation page
+- absence of strong logistics-label markers
+
+This prevents a second page of pick items from being mistaken as a logistics label.
+
+### 4. Empty pages
+
 Pages with no meaningful text are treated as empty.
 
-### Logistics-label pages
-Pages matching carrier-specific shipping-label features are treated as logistics pages.
+### 5. Unknown pages
 
-### Fallback
-If a page is **not clearly a pick label** and **not empty**, the script treats it as a logistics label.
+If a page is not clearly logistics, pick, continuation, or empty, the script classifies it conservatively as **unknown**, not logistics.
 
-This follows the practical rule:
-
-> Detect non-logistics pages first, then subtract them.
+This prevents accidental over-counting.
 
 ---
 
@@ -194,14 +258,13 @@ Place these files together in one folder:
 ```text
 your_folder/
 │
-├─ Logistics Pdf Renamer Instock.py
-├─ Logistics Pdf Renamer Instock.bat
+├─ logistics_pdf_renamer_instock.py
+├─ logistics_pdf_renamer_instock.bat
 │
-├─ 711-6個.pdf
-├─ 蝦皮店到店-134個.pdf
-├─ 全家-1個.pdf
-├─ 隔日達-12個.pdf
-└─ 萊爾富-2個.pdf
+├─ any_name_1.pdf
+├─ any_name_2.pdf
+├─ any_name_3.pdf
+└─ ...
 ```
 
 The PDF filenames themselves do not matter.  
@@ -212,6 +275,7 @@ The script identifies them by **content**, not by filename.
 ## Processing Logic
 
 ### 1. Detect logistics type
+
 The script scans the PDF text and decides whether the file is:
 
 - `711`
@@ -221,25 +285,39 @@ The script scans the PDF text and decides whether the file is:
 - `莱尔福`
 
 ### 2. Classify pages
+
 Each page is classified as:
 
 - logistics label
 - pick label
+- pick continuation
 - empty page
+- unknown page
 
 ### 3. Count only logistics labels
-Only logistics-label pages are counted.
+
+Only real logistics-label pages are counted.
 
 ### 4. Rename original PDF
+
 The original full PDF is renamed based on logistics type and logistics-label count.
 
 ### 5. Create no-pick copy
+
 A second PDF is generated containing only logistics-label pages.
 
-### 6. Archive
+### 6. Calculate batch total
+
+The script sums the logistics-label counts from **all PDFs in the current run**.
+
+This total is used in the final RAR filename.
+
+### 7. Archive
+
 All processed PDFs are packed into a `.rar` archive using WinRAR.
 
-### 7. Cleanup
+### 8. Cleanup
+
 After successful archive creation, the processed PDFs in the working folder are deleted.
 
 ---
@@ -269,7 +347,7 @@ Protected cases include:
 Double-click:
 
 ```text
-Logistics Pdf Renamer Instock.bat
+logistics_pdf_renamer_instock.bat
 ```
 
 The runner will:
@@ -284,7 +362,7 @@ If your Python filename contains spaces, the `.bat` should call it with quotes.
 Example:
 
 ```bat
-python "Logistics Pdf Renamer Instock.py"
+python "logistics_pdf_renamer_instock.py"
 ```
 
 ---
@@ -317,8 +395,10 @@ You also need:
 ## Design Philosophy
 
 - **Do not trust page count**
-- **Detect non-logistics pages first**
+- **Detect real logistics anchors**
+- **Recognize multi-page pick lists**
 - **Keep only real logistics labels in the no-pick copy**
+- **Prevent uncertain pages from inflating the order count**
 - **Prefer practical stability over rigid assumptions**
 - **Stop clearly when something is truly wrong**
 
@@ -335,9 +415,11 @@ If something looks wrong:
 - Is the `.bat` pointing to the exact `.py` filename?
 - Are the files really one of the 5 supported logistics types?
 - Did the PDF contain readable text, not just images?
+- Is a pick list continuing onto a second page?
+- Is there already a same-day RAR batch in `Downloads`?
 
 ---
 
 ## End
 
-This version is designed for daily instock PDF processing where one logistics label may be followed by multiple pick labels or empty pages.
+This version is designed for daily instock PDF processing where one logistics label may be followed by multiple pick labels, multi-page pick-label continuations, or empty pages.
