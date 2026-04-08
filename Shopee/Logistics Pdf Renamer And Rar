@@ -22,6 +22,7 @@ except ImportError as exc:
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTPUT_DIR = Path(r"C:\Users\zouzh\Downloads")
 ALLOWED_SUFFIXES = {".pdf"}
+RAR_BASE_NAME = "三得美（预刷）"
 
 LOGISTICS_RULES = {
     "711": {
@@ -81,7 +82,8 @@ def main() -> None:
         assign_new_names(pdf_infos)
         rename_pdfs(pdf_infos)
 
-        rar_path = build_output_rar_path(OUTPUT_DIR)
+        total_label_count = sum(info.page_count for info in pdf_infos)
+        rar_path = build_output_rar_path(OUTPUT_DIR, total_label_count)
         create_rar(
             winrar_exe,
             rar_path,
@@ -110,6 +112,7 @@ def get_pdf_files(folder: Path) -> list[Path]:
     return pdfs
 
 
+
 def read_pdf_texts(path: Path) -> list[str]:
     try:
         reader = PdfReader(str(path))
@@ -129,6 +132,7 @@ def read_pdf_texts(path: Path) -> list[str]:
     return page_texts
 
 
+
 def normalize_text(text: str) -> str:
     text = text.replace("\u3000", " ")
     text = text.replace("\r", "\n")
@@ -136,10 +140,12 @@ def normalize_text(text: str) -> str:
     return text
 
 
+
 def fuzzy_contains(text: str, keyword: str) -> bool:
     compact_text = re.sub(r"\s+", "", text).lower()
     compact_keyword = re.sub(r"\s+", "", keyword).lower()
     return compact_keyword in compact_text
+
 
 
 def detect_logistics_type(filename: str, text: str) -> str:
@@ -180,6 +186,7 @@ def detect_logistics_type(filename: str, text: str) -> str:
     )
 
 
+
 def extract_order_ids(filename: str, page_texts: list[str], patterns: list[str]) -> list[str]:
     order_ids: list[str] = []
 
@@ -203,6 +210,7 @@ def extract_order_ids(filename: str, page_texts: list[str], patterns: list[str])
     return order_ids
 
 
+
 def analyze_pdf(path: Path) -> PdfInfo:
     page_texts = read_pdf_texts(path)
     page_count = len(page_texts)
@@ -219,6 +227,7 @@ def analyze_pdf(path: Path) -> PdfInfo:
         target_name=target_name,
         page_count=page_count,
     )
+
 
 
 def validate_order_ids_when_needed(pdf_infos: list[PdfInfo]) -> None:
@@ -284,6 +293,7 @@ def validate_order_ids_when_needed(pdf_infos: list[PdfInfo]) -> None:
     )
 
 
+
 def assign_new_names(pdf_infos: list[PdfInfo]) -> None:
     groups: dict[str, list[PdfInfo]] = defaultdict(list)
     for info in pdf_infos:
@@ -303,6 +313,7 @@ def assign_new_names(pdf_infos: list[PdfInfo]) -> None:
             reserved_names.add(candidate.lower())
 
 
+
 def make_unique_pdf_name(base_stem: str, reserved_names: set[str]) -> str:
     candidate = f"{base_stem}.pdf"
     counter = 2
@@ -312,6 +323,7 @@ def make_unique_pdf_name(base_stem: str, reserved_names: set[str]) -> str:
         counter += 1
 
     return candidate
+
 
 
 def rename_pdfs(pdf_infos: list[PdfInfo]) -> None:
@@ -332,6 +344,7 @@ def rename_pdfs(pdf_infos: list[PdfInfo]) -> None:
             raise ProcessingError(
                 f"Failed to rename {info.path.name} -> {info.new_path.name}. Details: {exc}"
             ) from exc
+
 
 
 def find_winrar_exe() -> Path:
@@ -355,20 +368,76 @@ def find_winrar_exe() -> Path:
     )
 
 
-def build_output_rar_path(output_dir: Path) -> Path:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    base_stem = datetime.today().strftime("%Y%m%d") + "三得美"
 
-    candidate = output_dir / f"{base_stem}.rar"
+def build_output_rar_path(output_dir: Path, total_count: int) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    date_prefix = datetime.today().strftime("%Y%m%d")
+    family_prefix = f"{date_prefix}{RAR_BASE_NAME}-"
+
+    existing_same_day_archives: list[Path] = []
+    for candidate in output_dir.iterdir():
+        if not candidate.is_file():
+            continue
+        if candidate.suffix.lower() != ".rar":
+            continue
+        if candidate.name.startswith(family_prefix):
+            existing_same_day_archives.append(candidate)
+
+    batch_number = len(existing_same_day_archives) + 1
+    base_stem = f"{date_prefix}{RAR_BASE_NAME}-{total_count}单"
+
+    if batch_number == 1:
+        candidate = output_dir / f"{base_stem}.rar"
+        if not candidate.exists():
+            return candidate
+        batch_number = 2
+
+    batch_suffix = to_chinese_batch_suffix(batch_number)
+    candidate = output_dir / f"{base_stem}{batch_suffix}.rar"
+
     if not candidate.exists():
         return candidate
 
-    index = 2
     while True:
-        candidate = output_dir / f"{base_stem}({index}).rar"
+        batch_number += 1
+        batch_suffix = to_chinese_batch_suffix(batch_number)
+        candidate = output_dir / f"{base_stem}{batch_suffix}.rar"
         if not candidate.exists():
             return candidate
-        index += 1
+
+
+
+def to_chinese_batch_suffix(batch_number: int) -> str:
+    if batch_number <= 1:
+        return ""
+
+    numerals = {
+        2: "二",
+        3: "三",
+        4: "四",
+        5: "五",
+        6: "六",
+        7: "七",
+        8: "八",
+        9: "九",
+        10: "十",
+    }
+
+    if batch_number in numerals:
+        return f"（第{numerals[batch_number]}批）"
+
+    if 11 <= batch_number <= 19:
+        ones = batch_number - 10
+        one_part = numerals[ones] if ones > 0 else ""
+        return f"（第十{one_part}批）"
+
+    tens = batch_number // 10
+    ones = batch_number % 10
+    tens_part = numerals.get(tens, str(tens))
+    ones_part = numerals.get(ones, "") if ones else ""
+    return f"（第{tens_part}十{ones_part}批）"
+
 
 
 def create_rar(winrar_exe: Path, rar_path: Path, files: list[Path]) -> None:
@@ -405,6 +474,7 @@ def create_rar(winrar_exe: Path, rar_path: Path, files: list[Path]) -> None:
         raise ProcessingError(
             "RAR creation appeared to succeed, but the output RAR file was not created correctly."
         )
+
 
 
 def delete_files(files: list[Path]) -> None:
