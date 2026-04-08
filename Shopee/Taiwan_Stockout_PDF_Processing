@@ -124,7 +124,8 @@ def analyze_pdf(path: Path) -> PdfInfo:
     if not page_texts:
         raise ProcessingError(f"PDF has no pages: {path.name}")
 
-    full_text = "\n".join(page_texts)
+    full_text = "
+".join(page_texts)
     logistics_key = detect_logistics_type(path.name, full_text)
     target_name = LOGISTICS_RULES[logistics_key]["target_name"]
 
@@ -204,29 +205,57 @@ def classify_pages(page_texts: list[str], logistics_key: str) -> list[PageInfo]:
     result: list[PageInfo] = []
     strong_markers = LOGISTICS_RULES[logistics_key]["strong_page_markers"]
 
+    previous_kind = "start"
     for idx, raw_text in enumerate(page_texts):
         normalized = normalize_text(raw_text)
-        kind = classify_single_page(normalized, strong_markers)
+        kind = classify_single_page(normalized, strong_markers, previous_kind)
         result.append(PageInfo(index=idx, raw_text=raw_text, normalized_text=normalized, kind=kind))
+        previous_kind = kind
 
     return result
 
 
-def classify_single_page(text: str, strong_logistics_markers: list[str]) -> str:
+def classify_single_page(text: str, strong_logistics_markers: list[str], previous_kind: str) -> str:
     stripped = compact(text)
     if not stripped or len(stripped) <= 6:
         return "empty"
 
     pick_hits = sum(1 for marker in PICK_PAGE_MARKERS if fuzzy_contains(text, marker))
     logistics_hits = sum(1 for marker in strong_logistics_markers if fuzzy_contains(text, marker))
+    continuation_rows = count_pick_continuation_rows(text)
 
-    # Strong pick-label signature.
+    # Strong logistics anchor page.
+    if logistics_hits >= 2:
+        return "logistics"
+
+    # Strong pick-label header page.
     if pick_hits >= 3:
         return "pick"
 
-    # Strong logistics signature.
-    if logistics_hits >= 2:
+    # Pick table continuation page: often a second page of item rows with no header.
+    if continuation_rows >= 2 and logistics_hits == 0:
+        return "pick_continuation"
+
+    # Context-aware continuation: if a pick page spills over, the next page may contain
+    # only shelf rows and quantities without the usual Order/Tracking header markers.
+    if previous_kind in {"pick", "pick_continuation"} and continuation_rows >= 1 and logistics_hits == 0:
+        return "pick_continuation"
+
+    # If the page looks like warehouse picking output, treat it as pick.
+    if pick_hits >= 2 and ("zz" in stripped or "orderno:" in stripped or "trackingno:" in stripped):
+        return "pick"
+
+    # Empty / nearly blank pages are ignored.
+    if len(re.sub(r"[^A-Za-z0-9一-鿿]", "", text)) <= 4:
+        return "empty"
+
+    # Conservative fallback: only treat a page as logistics if it still shows at least one
+    # carrier-specific marker and does not look like pick-label continuation content.
+    if logistics_hits >= 1 and continuation_rows == 0:
         return "logistics"
+
+    # Unknown pages are treated as non-logistics so they never inflate the label count.
+    return "unknown"
 
     # If the page looks like warehouse picking output, treat it as pick.
     if pick_hits >= 2 and ("zz" in stripped or "orderno:" in stripped or "trackingno:" in stripped):
@@ -239,6 +268,21 @@ def classify_single_page(text: str, strong_logistics_markers: list[str]) -> str:
     # Fallback by subtraction philosophy: pages that are not clearly pick or empty
     # are treated as logistics pages.
     return "logistics"
+
+
+def count_pick_continuation_rows(text: str) -> int:
+    row_count = 0
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        if re.match(r"^[A-Z][0-9]{1,2}-[0-9]{2}-[0-9]{2}", clean):
+            row_count += 1
+            continue
+        if re.match(r"^[A-Z][0-9]-[0-9]-[0-9]", clean):
+            row_count += 1
+            continue
+    return row_count
 
 
 def assign_output_names(pdf_infos: list[PdfInfo]) -> None:
