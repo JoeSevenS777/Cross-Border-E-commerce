@@ -95,7 +95,8 @@ def main() -> None:
         build_no_pick_pdfs(pdf_infos)
 
         all_outputs = collect_output_files(pdf_infos)
-        rar_path = build_output_rar_path(OUTPUT_DIR)
+        total_logistics_count = sum(info.logistics_count for info in pdf_infos)
+        rar_path = build_output_rar_path(OUTPUT_DIR, total_logistics_count)
         create_rar(winrar_exe, rar_path, all_outputs)
         delete_files(all_outputs)
 
@@ -124,8 +125,7 @@ def analyze_pdf(path: Path) -> PdfInfo:
     if not page_texts:
         raise ProcessingError(f"PDF has no pages: {path.name}")
 
-    full_text = "
-".join(page_texts)
+    full_text = "\n".join(page_texts)
     logistics_key = detect_logistics_type(path.name, full_text)
     target_name = LOGISTICS_RULES[logistics_key]["target_name"]
 
@@ -403,20 +403,73 @@ def find_winrar_exe() -> Path:
     raise ProcessingError("WinRAR was not found. WinRAR must be installed and callable, otherwise the script stops.")
 
 
-def build_output_rar_path(output_dir: Path) -> Path:
+def build_output_rar_path(output_dir: Path, total_count: int) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-    base_stem = datetime.today().strftime("%Y%m%d") + RAR_BASE_NAME
 
-    candidate = output_dir / f"{base_stem}.rar"
+    date_prefix = datetime.today().strftime("%Y%m%d")
+    family_prefix = f"{date_prefix}{RAR_BASE_NAME}-"
+
+    existing_same_day_archives: list[Path] = []
+    for candidate in output_dir.iterdir():
+        if not candidate.is_file():
+            continue
+        if candidate.suffix.lower() != ".rar":
+            continue
+        if candidate.name.startswith(family_prefix):
+            existing_same_day_archives.append(candidate)
+
+    batch_number = len(existing_same_day_archives) + 1
+    base_stem = f"{date_prefix}{RAR_BASE_NAME}-{total_count}单"
+
+    if batch_number == 1:
+        candidate = output_dir / f"{base_stem}.rar"
+        if not candidate.exists():
+            return candidate
+        batch_number = 2
+
+    batch_suffix = to_chinese_batch_suffix(batch_number)
+    candidate = output_dir / f"{base_stem}{batch_suffix}.rar"
+
     if not candidate.exists():
         return candidate
 
-    index = 2
     while True:
-        candidate = output_dir / f"{base_stem}({index}).rar"
+        batch_number += 1
+        batch_suffix = to_chinese_batch_suffix(batch_number)
+        candidate = output_dir / f"{base_stem}{batch_suffix}.rar"
         if not candidate.exists():
             return candidate
-        index += 1
+
+
+def to_chinese_batch_suffix(batch_number: int) -> str:
+    if batch_number <= 1:
+        return ""
+
+    numerals = {
+        2: "二",
+        3: "三",
+        4: "四",
+        5: "五",
+        6: "六",
+        7: "七",
+        8: "八",
+        9: "九",
+        10: "十",
+    }
+
+    if batch_number in numerals:
+        return f"（第{numerals[batch_number]}批）"
+
+    if 11 <= batch_number <= 19:
+        ones = batch_number - 10
+        one_part = numerals[ones] if ones > 0 else ""
+        return f"（第十{one_part}批）"
+
+    tens = batch_number // 10
+    ones = batch_number % 10
+    tens_part = numerals.get(tens, str(tens))
+    ones_part = numerals.get(ones, "") if ones else ""
+    return f"（第{tens_part}十{ones_part}批）"
 
 
 def create_rar(winrar_exe: Path, rar_path: Path, files: list[Path]) -> None:
