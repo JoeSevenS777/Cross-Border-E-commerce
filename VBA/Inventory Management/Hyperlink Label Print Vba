@@ -181,7 +181,7 @@ Private Sub WriteOneLabel(ByVal ws As Worksheet, ByVal startRow As Long, _
         With labelRange.Characters(1, shelfLen).Font
             .Name = "Arial"
             .Bold = True
-            .Size = 48
+            .Size = 44
         End With
 
         With labelRange.Characters(skuStart, skuLen).Font
