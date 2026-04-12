@@ -448,9 +448,9 @@ Public Sub PrintSelectedBoxLabelsPreview()
     wsLabel.Cells.Clear
     wsLabel.ResetAllPageBreaks
 
-    wsLabel.Columns("A").ColumnWidth = 9.2
-    wsLabel.Columns("B").ColumnWidth = 37
-    wsLabel.Columns("C").ColumnWidth = 8.15
+    wsLabel.Columns("A").ColumnWidth = 11.5
+    wsLabel.Columns("B").ColumnWidth = 35.5
+    wsLabel.Columns("C").ColumnWidth = 7.5
 
     With wsLabel.PageSetup
         On Error Resume Next
