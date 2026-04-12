@@ -24,6 +24,8 @@ It currently supports:
 - strict row validation
 - box-based grouping
 - per-box page numbering
+- per-box SKU count display
+- per-box total quantity display
 - 14 detail rows per page
 - dedicated columns for shelf, SKU, and quantity
 - PrintPreview output before printing
@@ -39,7 +41,7 @@ The generated label now follows this 3-column layout:
 - `C`: `箱號: 01`
 
 ### Row 2
-- `A:B` merged: `SKU總數： 2`
+- `A:B` merged: `SKU總數： 2  |  總數量：65`
 - `C`: `第1頁/共1頁`
 
 ### Row 3
@@ -60,6 +62,7 @@ The generated label now follows this 3-column layout:
 - header row font size: **13**
 - detail row font size: **12**
 - WrapText is disabled
+- row 2 now combines **SKU總數** and **總數量** in the merged `A:B` area
 - page numbering is centered in column C row 2
 - box number is centered in column C row 1
 
@@ -127,6 +130,32 @@ Validation is applied only to the rows actually being processed.
 
 ---
 
+## Quantity Summary Behavior
+
+### Per-box total quantity
+The macro now calculates **total quantity by box**.
+
+That total is displayed together with the SKU count in row 2:
+
+- `SKU總數： x  |  總數量：y`
+
+### Example
+If one box contains quantities:
+
+- `10`
+- `10`
+- `10`
+- `10`
+- `10`
+- `10`
+- `5`
+
+Then row 2 will display:
+
+- `SKU總數： 7  |  總數量：65`
+
+---
+
 ## Box-Based Output Logic
 
 ### 1. Grouping
@@ -177,7 +206,7 @@ The current version uses:
 
 ```text
 美妝補貨                          箱號: 01
-SKU總數： 2                      第1頁/共1頁
+SKU總數： 2  |  總數量：60        第1頁/共1頁
 
 貨架位↓      明細SKU ↓            數量↓
 D-04-04      MJ-萌睫尚品-MJ3D      10
@@ -207,9 +236,9 @@ The current VBA version uses these layout settings:
 | --- | --- |
 | rows per page | `14` |
 | page gap | `0` |
-| column A width | `9.2` |
-| column B width | `37` |
-| column C width | `8.15` |
+| column A width | `11.5` |
+| column B width | `35.5` |
+| column C width | `7.5` |
 | title / SKU-total row height | `24` |
 | header row height | `22.1` |
 | detail row height | `20.05` |
@@ -237,8 +266,10 @@ This version has been adjusted to support:
 - 3-column layout
 - `貨架位 | 明細SKU | 數量`
 - `箱號` shown in row 1
+- `SKU總數 | 總數量` shown together in row 2
 - page info shown in row 2
 - per-box page numbering
+- per-box total quantity calculation
 - 14-row page capacity
 - no empty spacer row between page blocks
 
