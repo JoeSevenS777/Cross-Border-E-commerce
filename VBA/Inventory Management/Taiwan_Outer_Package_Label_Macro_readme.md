@@ -238,7 +238,7 @@ The current VBA version uses these layout settings:
 | page gap | `0` |
 | column A width | `11.5` |
 | column B width | `35.5` |
-| column C width | `7.5` |
+| column C width | `7.6` |
 | title / SKU-total row height | `24` |
 | header row height | `22.1` |
 | detail row height | `20.05` |
