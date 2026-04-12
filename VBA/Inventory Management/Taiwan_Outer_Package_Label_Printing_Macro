@@ -12,6 +12,10 @@ Private Function BoxLabel_Text_SKUCount() As String
     BoxLabel_Text_SKUCount = "SKU" & ChrW(&H7E3D) & ChrW(&H6578) & ChrW(&HFF1A)
 End Function
 
+Private Function BoxLabel_Text_TotalQty() As String
+    BoxLabel_Text_TotalQty = ChrW(&H7E3D) & ChrW(&H6578) & ChrW(&H91CF) & ChrW(&HFF1A)
+End Function
+
 Private Function BoxLabel_Text_DetailHeader_Left() As String
     BoxLabel_Text_DetailHeader_Left = ChrW(&H660E) & ChrW(&H7D30) & "SKU " & ChrW(&H2193)
 End Function
@@ -255,6 +259,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
     Dim boxList() As String
     Dim lineTexts() As Collection
     Dim boxCount As Long
+    Dim boxTotalQty() As Long
 
     Dim qtyVal As Variant
     Dim qtyNum As Double
@@ -407,10 +412,12 @@ Public Sub PrintSelectedBoxLabelsPreview()
 
     ReDim boxList(1 To selectedBoxes.Count)
     ReDim lineTexts(1 To selectedBoxes.Count)
+    ReDim boxTotalQty(1 To selectedBoxes.Count)
 
     For i = 1 To selectedBoxes.Count
         boxList(i) = CStr(selectedBoxes(i))
         Set lineTexts(i) = New Collection
+        boxTotalQty(i) = 0
     Next i
 
     boxCount = selectedBoxes.Count
@@ -428,6 +435,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
                     If IsNumeric(qtyText) Then
                         If CDbl(qtyText) > 0 And CDbl(qtyText) = Int(CDbl(qtyText)) Then
                             lineTexts(boxIdx).Add Array(skuText, qtyText, shelfText)
+                            boxTotalQty(boxIdx) = boxTotalQty(boxIdx) + CLng(CDbl(qtyText))
                         End If
                     End If
                 End If
@@ -488,7 +496,9 @@ Public Sub PrintSelectedBoxLabelsPreview()
                 wsLabel.Range("A" & pageTop).Value = BoxLabel_Text_Title()
                 wsLabel.Range("C" & pageTop).Value = BoxLabel_Text_BoxNo() & " " & boxList(i)
 
-                wsLabel.Range("A" & (pageTop + 1)).Value = BoxLabel_Text_SKUCount() & " " & c.Count
+                wsLabel.Range("A" & (pageTop + 1)).Value = _
+                    BoxLabel_Text_SKUCount() & " " & c.Count & "  |  " & _
+                    BoxLabel_Text_TotalQty() & boxTotalQty(i)
                 wsLabel.Range("C" & (pageTop + 1)).Value = BoxLabel_Text_PageInfo(boxPageNo, boxTotalPages)
 
                 wsLabel.Range("A" & (pageTop + 2)).Value = BoxLabel_Text_DetailHeader_Right()
