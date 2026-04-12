@@ -450,7 +450,7 @@ Public Sub PrintSelectedBoxLabelsPreview()
 
     wsLabel.Columns("A").ColumnWidth = 11.5
     wsLabel.Columns("B").ColumnWidth = 35.5
-    wsLabel.Columns("C").ColumnWidth = 7.5
+    wsLabel.Columns("C").ColumnWidth = 7.6
 
     With wsLabel.PageSetup
         On Error Resume Next
