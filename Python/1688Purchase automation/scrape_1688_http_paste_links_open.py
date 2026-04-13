@@ -3,69 +3,35 @@ import re
 import json
 import time
 import sys
-import subprocess
-import requests
+from pathlib import Path
+from datetime import datetime
+
 import pandas as pd
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from config import (
-    SCRAPE_FOLDER,
-    ALI_COOKIE_PATH,
-    USER_AGENT,
-    TIMEOUT,
-)
+from config import SCRAPE_FOLDER
 
-SCRIPT_VERSION = "scrape_1688_http v2025-11-30-01"
+
+SCRIPT_VERSION = "scrape_1688_browser_login v2026-04-13-01"
 
 
 # ======================================================================
 # Directories
 # ======================================================================
+BASE_DIR = Path(SCRAPE_FOLDER)
+BASE_DIR.mkdir(parents=True, exist_ok=True)
 
-BASE_DIR = SCRAPE_FOLDER
-DEBUG_DIR = os.path.join(BASE_DIR, "debug_html")
-os.makedirs(DEBUG_DIR, exist_ok=True)
+DEBUG_DIR = BASE_DIR / "debug_html"
+DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
-
-# ======================================================================
-# Cookie & Headers
-# ======================================================================
-
-def load_cookie() -> str:
-    """\
-    Load 1688 cookie from:
-    1. Environment variable ALI_COOKIE
-    2. ali_cookie.txt at ALI_COOKIE_PATH
-    """
-    env_ck = os.environ.get("ALI_COOKIE", "").strip()
-    if env_ck:
-        return env_ck
-
-    if ALI_COOKIE_PATH and os.path.exists(ALI_COOKIE_PATH):
-        with open(ALI_COOKIE_PATH, "r", encoding="utf-8") as f:
-            ck = f.read().strip()
-        if ck:
-            return ck
-
-    raise SystemExit("❌ 未找到 1688 Cookie，请设置环境变量 ALI_COOKIE 或配置 ALI_COOKIE_PATH")
-
-
-def make_detail_headers(url: str) -> dict:
-    """Headers for requesting 1688 product page."""
-    return {
-        "User-Agent": USER_AGENT,
-        "Accept": "*/*",
-        "Referer": url,  # 和 add_to_cart_http_1688.py 一致
-        "Cookie": load_cookie(),
-        "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8",
-    }
+PROFILE_DIR = BASE_DIR / "playwright_1688_profile"
+PROFILE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ======================================================================
 # Utilities
 # ======================================================================
-
 def extract_offer_id(url: str) -> str:
-    """Extract offerId from product URL."""
     if not url:
         return ""
     s = str(url).strip()
@@ -79,35 +45,68 @@ def extract_offer_id(url: str) -> str:
 
 
 def save_debug_html(offer_id: str, html: str) -> None:
-    """Save raw HTML for debugging."""
-    path = os.path.join(DEBUG_DIR, f"{offer_id}.html")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
+    target = DEBUG_DIR / f"{offer_id or 'unknown'}.html"
+    target.write_text(html, encoding="utf-8")
+
+
+def read_links_from_stdin() -> list[str]:
+    print("\n请粘贴 1688 商品链接（每行一个）。")
+    print("粘贴完成后，请再输入一个空行并回车结束。\n")
+
+    urls: list[str] = []
+    seen: set[str] = set()
+
+    while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        line = line.strip()
+        if not line:
+            break
+
+        parts = [p.strip() for p in re.split(r"\s+", line) if p.strip()]
+        for p in parts:
+            u = p.strip().strip('"').strip("'")
+            if not u:
+                continue
+            if not (u.startswith("http://") or u.startswith("https://")):
+                continue
+            if u not in seen:
+                seen.add(u)
+                urls.append(u)
+
+    return urls
+
+
+def build_output_path() -> Path:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return BASE_DIR / f"pasted_links_{ts}(done).xlsx"
+
+
+def normalize_text(x) -> str:
+    if x is None:
+        return ""
+    return str(x).strip()
 
 
 # ======================================================================
-# HTML PARSER  ——  和 add_to_cart_http_1688.py 保持一致
+# Page parsing
 # ======================================================================
-
-def _extract_json_object(html: str, key: str) -> str | None:
-    """\
-    从页面 HTML 中找到形如:
-      key: { ... }
-    的 JSON 对象字符串（只做大括号匹配，不做完整 JS 解析）。
-    """
-    idx = html.find(key)
+def extract_json_object_from_text(text: str, key: str) -> str | None:
+    idx = text.find(key)
     if idx == -1:
         return None
 
-    start = html.find("{", idx)
+    start = text.find("{", idx)
     if start == -1:
         return None
 
     brace_level = 0
     in_str = False
     esc = False
-    for i in range(start, len(html)):
-        ch = html[i]
+
+    for i in range(start, len(text)):
+        ch = text[i]
         if in_str:
             if esc:
                 esc = False
@@ -123,19 +122,12 @@ def _extract_json_object(html: str, key: str) -> str | None:
             elif ch == "}":
                 brace_level -= 1
                 if brace_level == 0:
-                    return html[start: i + 1]
+                    return text[start:i + 1]
     return None
 
 
-def parse_sku_data_from_html(html: str):
-    """\
-    从 HTML 中解析出 sku 数据和店铺名，返回:
-        (sku_records, shop_name)
-
-    sku_records 是列表，每个元素形如:
-        {"SKU ID": "xxx", "Spec ID": "yyy", "属性SKU": "黑色-M"}
-    """
-    json_str = _extract_json_object(html, "skuModel")
+def parse_sku_data_from_html(html: str) -> tuple[list[dict], str]:
+    json_str = extract_json_object_from_text(html, "skuModel")
     if not json_str:
         return [], ""
 
@@ -146,25 +138,26 @@ def parse_sku_data_from_html(html: str):
 
     sku_map = data.get("skuInfoMap") or {}
     records: list[dict] = []
+
     for _, v in sku_map.items():
-        # 1688 skuInfoMap 通常会包含 skuId / specId / specAttrs 等字段
         sku_id = v.get("skuId") or v.get("id") or ""
-        spec = v.get("specId") or v.get("specIdStr") or ""
+        spec_id = v.get("specId") or v.get("specIdStr") or ""
         attrs = v.get("specAttrs") or []
+
         if isinstance(attrs, list):
             attr_values = [str(a.get("value", "")).strip() for a in attrs if a]
             attr = "-".join([x for x in attr_values if x])
         else:
-            # 有些页面 specAttrs 已经是 “黑色-M” 这种字符串
-            attr = str(attrs) if attrs else ""
+            attr = str(attrs).strip() if attrs else ""
 
-        records.append({
-            "SKU ID": str(sku_id),
-            "Spec ID": str(spec),
-            "属性SKU": attr,
-        })
+        records.append(
+            {
+                "SKU ID": str(sku_id),
+                "Spec ID": str(spec_id),
+                "属性SKU": attr,
+            }
+        )
 
-    # 店铺名从 HTML 中的 "companyName":"xxx" 里提取
     shop_name = ""
     m = re.search(r'"companyName"\s*:\s*"([^"\\]+)"', html)
     if m:
@@ -173,54 +166,88 @@ def parse_sku_data_from_html(html: str):
     return records, shop_name
 
 
-# ======================================================================
-# SCRAPE ONE PRODUCT
-# ======================================================================
+def detect_blocked_page(html: str) -> bool:
+    signals = [
+        "_____tmd_____/punish",
+        '"action":"captcha"',
+        "x5secdata=",
+        "window._config_",
+    ]
+    lowered = html.lower()
+    return any(s.lower() in lowered for s in signals)
 
-def scrape_one_product(session: requests.Session, url: str) -> list[dict]:
-    """\
-    对单个商品链接：
-      - 请求 HTML
-      - 解析 SKU 数据 + 店铺名称
-      - 返回若干行 dict，供 DataFrame 使用
-    """
-    url = str(url).strip()
+
+# ======================================================================
+# Browser helpers
+# ======================================================================
+def wait_for_manual_login(page) -> None:
+    print("\n=== 浏览器已打开 ===")
+    print("请在浏览器里手动登录 1688。")
+    print("登录完成并确认能正常打开商品页后，回到终端按回车继续...\n")
+    input()
+
+
+def ensure_home_ready(page) -> None:
+    print("[INFO] 打开 1688 首页...")
+    page.goto("https://www.1688.com/", wait_until="domcontentloaded", timeout=120000)
+    time.sleep(3)
+
+
+def try_pass_challenge(page, wait_seconds: int = 20) -> None:
+    print(f"[INFO] 等待页面验证/跳转，最多 {wait_seconds} 秒...")
+    end_time = time.time() + wait_seconds
+    last_url = ""
+
+    while time.time() < end_time:
+        try:
+            current = page.url
+            if current != last_url:
+                print(f"       当前页面: {current}")
+                last_url = current
+        except Exception:
+            pass
+        time.sleep(1)
+
+
+def scrape_one_product(page, url: str) -> tuple[list[dict], str]:
+    url = normalize_text(url)
     if not url:
-        return []
+        return [], "空链接"
 
     offer_id = extract_offer_id(url)
     if not offer_id:
-        print(f"  [WARN] 无法从商品链接解析商品ID: {url}")
-        return []
+        return [], f"无法解析 offerId: {url}"
 
-    print(f"  -> Scraping {url} (offerId={offer_id})")
-
-    headers = make_detail_headers(url)
+    print(f"\n-> Scraping {url}")
+    print(f"   offerId={offer_id}")
 
     try:
-        resp = session.get(
-            url,
-            headers=headers,
-            timeout=TIMEOUT,
-            allow_redirects=True,
-        )
+        page.goto(url, wait_until="domcontentloaded", timeout=120000)
+    except PlaywrightTimeoutError:
+        print("   [WARN] 首次打开页面超时，继续尝试读取当前页面内容")
     except Exception as e:
-        print("  [WARN] 请求失败:", e)
-        return []
+        return [], f"打开页面失败: {e}"
 
-    if resp.status_code != 200:
-        print(f"  [WARN] HTTP {resp.status_code}，无法获取页面")
-        return []
+    time.sleep(3)
+    try_pass_challenge(page, wait_seconds=15)
 
-    html = resp.text
+    try:
+        html = page.content()
+    except Exception as e:
+        return [], f"读取页面 HTML 失败: {e}"
+
     save_debug_html(offer_id, html)
 
+    if detect_blocked_page(html):
+        print("   [WARN] 页面仍然是风控/验证页")
+        print("   [INFO] 请查看浏览器是否需要手动点击验证或重新登录")
+        return [], "命中风控验证页"
+
     sku_records, shop_name = parse_sku_data_from_html(html)
-    print(f"  [DEBUG] 解析到 SKU 数量: {len(sku_records)}")  # 关键调试信息
+    print(f"   [DEBUG] 解析到 SKU 数量: {len(sku_records)}")
 
     if not sku_records:
-        print("  [WARN] 未能从 HTML 解析到任何 SKU 记录")
-        return []
+        return [], "未从页面 HTML 中解析到 skuModel"
 
     rows: list[dict] = []
     for rec in sku_records:
@@ -234,196 +261,80 @@ def scrape_one_product(session: requests.Session, url: str) -> list[dict]:
                 "店铺名称": shop_name,
             }
         )
-    return rows
 
-
-
-def open_file_with_default_app(filepath: str) -> None:
-    """Open a file with the OS default application (best-effort)."""
-    try:
-        if not filepath or not os.path.exists(filepath):
-            return
-        if sys.platform.startswith("win"):
-            os.startfile(filepath)  # type: ignore[attr-defined]
-        elif sys.platform.startswith("darwin"):
-            subprocess.run(["open", filepath], check=False)
-        else:
-            subprocess.run(["xdg-open", filepath], check=False)
-    except Exception as e:
-        print(f"[WARN] 已生成文件，但无法自动打开：{e}")
+    return rows, ""
 
 
 # ======================================================================
-# MAIN PIPELINE
+# Main
 # ======================================================================
+def main() -> None:
+    print("=== 1688 Browser ID Scrape ===")
+    print("版本:", SCRIPT_VERSION)
+    print("工作目录:", BASE_DIR)
+    print("浏览器用户目录:", PROFILE_DIR)
 
-def find_latest_workbook() -> str:
-    """在工作目录中找到最新的 .xlsx 文件（兼容旧流程，可选用）。"""
-    candidates: list[str] = []
-    for fn in os.listdir(BASE_DIR):
-        if fn.lower().endswith(".xlsx") and not fn.startswith("~$"):
-            full = os.path.join(BASE_DIR, fn)
-            if os.path.isfile(full):
-                candidates.append(full)
-
-    if not candidates:
-        raise FileNotFoundError(f"❌ 在 {BASE_DIR} 中未找到任何 .xlsx 工作簿")
-
-    return max(candidates, key=os.path.getmtime)
-
-
-def read_links_from_stdin() -> list[str]:
-    """    交互式读取商品链接：
-      - 支持一次性粘贴多行（每行一个链接）
-      - 以“空行 + 回车”结束输入
-      - 会做去重与简单清洗
-    """
-    import sys
-
-    print("\n请粘贴 1688 商品链接（每行一个）。")
-    print("粘贴完成后，请再输入一个空行并回车结束。\n")
-
-    urls: list[str] = []
-    seen: set[str] = set()
-
-    while True:
-        line = sys.stdin.readline()
-        if not line:  # EOF
-            break
-        line = line.strip()
-        if not line:
-            break
-
-        # 允许一行里粘贴多个链接（用空格分隔）
-        parts = [p.strip() for p in re.split(r"\s+", line) if p.strip()]
-        for p in parts:
-            u = p.strip().strip('"').strip("'")
-            if not u:
-                continue
-            if not (u.startswith("http://") or u.startswith("https://")):
-                # 容错：用户可能粘贴了不带协议的链接/无关文本
-                continue
-            if u not in seen:
-                seen.add(u)
-                urls.append(u)
-
-    return urls
-
-
-def build_output_path() -> str:
-    """输出到 ID_Scrape 目录，文件名不依赖输入 Excel。"""
-    from datetime import datetime
-
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out_name = f"pasted_links_{ts}(done).xlsx"
-    return os.path.join(BASE_DIR, out_name)
-
-
-def main():
-    import argparse
-
-    print("=== 1688 HTTP ID Scrape (No Selenium) ===")
-    print("版本：", SCRIPT_VERSION)
-    print("工作目录：", BASE_DIR)
-
-    parser = argparse.ArgumentParser(
-        description="1688 商品 SKU/SpecID 抓取（HTTP 方式）\n默认：交互式粘贴链接。\n可选：从 Excel 读取（旧流程）。",
-        formatter_class=argparse.RawTextHelpFormatter,
-    )
-    parser.add_argument(
-        "--excel",
-        nargs="?",
-        const="__AUTO__",
-        help="从 Excel 读取链接（旧流程）。不带参数则自动取工作目录最新的 .xlsx。\n示例：python scrape_1688_http.py --excel\n示例：python scrape_1688_http.py --excel input.xlsx",
-    )
-    args = parser.parse_args()
-
-    # 1) 获取待处理链接
-    urls: list[str] = []
-
-    if args.excel is not None:
-        # 旧流程：从 Excel 读取
-        try:
-            if args.excel == "__AUTO__":
-                wb_path = find_latest_workbook()
-            else:
-                wb_path = args.excel
-                if not os.path.isabs(wb_path):
-                    wb_path = os.path.join(BASE_DIR, wb_path)
-
-            print("待处理工作簿：")
-            print("   ", wb_path)
-
-            df = pd.read_excel(wb_path, dtype=str)
-            if "商品链接" not in df.columns:
-                raise SystemExit("❌ Excel 缺少列：商品链接")
-
-            for _, row in df.iterrows():
-                u = str(row.get("商品链接", "")).strip()
-                if u:
-                    urls.append(u)
-
-        except Exception as e:
-            print(f"[WARN] 读取 Excel 失败：{e}")
-            print("[WARN] 将退出，不生成输出文件。\n")
-            return
-    else:
-        # 新流程：交互式粘贴链接
-        urls = read_links_from_stdin()
-
-    # 清洗/去重
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for u in urls:
-        u = str(u).strip()
-        if not u:
-            continue
-        if u not in seen:
-            seen.add(u)
-            cleaned.append(u)
-
-    if not cleaned:
-        print("[WARN] 未提供任何有效商品链接。请重新运行并粘贴链接。\n")
+    urls = read_links_from_stdin()
+    if not urls:
+        print("[WARN] 未提供任何有效商品链接。")
         return
 
-    # 2) 抓取
-    session = requests.Session()
     all_rows: list[dict] = []
-    failed_urls: list[str] = []
+    failed: list[dict] = []
 
-    for url in cleaned:
-        rows = scrape_one_product(session, url)
-        if rows:
-            all_rows.extend(rows)
-        else:
-            failed_urls.append(url)
+    with sync_playwright() as p:
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=str(PROFILE_DIR),
+            headless=False,
+            channel="chrome",
+            args=[
+                "--start-maximized",
+                "--disable-blink-features=AutomationControlled",
+            ],
+            viewport={"width": 1440, "height": 900},
+        )
 
-    # 3) 输出或告警
+        page = context.new_page()
+        ensure_home_ready(page)
+        wait_for_manual_login(page)
+
+        for i, url in enumerate(urls, start=1):
+            print(f"\n===== 进度 {i}/{len(urls)} =====")
+            rows, error = scrape_one_product(page, url)
+            if rows:
+                all_rows.extend(rows)
+            else:
+                failed.append({"商品链接": url, "失败原因": error})
+                print(f"   [WARN] 失败原因: {error}")
+
+        context.close()
+
     if not all_rows:
         print("\n[WARN] 未获得任何 SKU 数据，不输出文件。")
-
-        # 给出失败链接列表（避免太长，最多 20 条）
-        if failed_urls:
-            print("[WARN] 可能失败的链接（最多显示 20 条）：")
-            for u in failed_urls[:20]:
-                print("  -", u)
-            if len(failed_urls) > 20:
-                print(f"  ... 以及另外 {len(failed_urls) - 20} 条")
-
-        print("\n建议排查：Cookie 是否过期、链接是否需要登录、或查看 debug_html 中保存的页面源码。\n")
+        if failed:
+            print("[WARN] 失败链接如下：")
+            for item in failed[:20]:
+                print(f"  - {item['商品链接']} | {item['失败原因']}")
+            if len(failed) > 20:
+                print(f"  ... 以及另外 {len(failed) - 20} 条")
         return
 
     out_df = pd.DataFrame(all_rows)
     out_path = build_output_path()
     out_df.to_excel(out_path, index=False)
 
-    print("\n全部处理完成。输出：", out_path)
+    print(f"\n全部处理完成。输出文件：{out_path}")
 
-    # 如果存在失败链接，给出提醒（仍然输出成功部分）
-    if failed_urls:
-        print(f"[WARN] 有 {len(failed_urls)} 个链接未抓取到数据（已忽略）。")
+    if failed:
+        fail_path = BASE_DIR / f"failed_links_{datetime.now().strftime('%Y%m%d-%H%M%S')}.xlsx"
+        pd.DataFrame(failed).to_excel(fail_path, index=False)
+        print(f"[WARN] 有 {len(failed)} 个链接失败，失败清单：{fail_path}")
 
-    open_file_with_default_app(out_path)
+    print("\n提示：")
+    print("1. 这个版本依赖真实浏览器登录状态，而不是单独 cookie 字符串。")
+    print("2. 浏览器用户目录会保存在 playwright_1688_profile，下次可复用登录状态。")
+    print("3. 如再次遇到验证页，请在浏览器里先手动完成验证，再继续运行。")
+
+
 if __name__ == "__main__":
     main()
-
