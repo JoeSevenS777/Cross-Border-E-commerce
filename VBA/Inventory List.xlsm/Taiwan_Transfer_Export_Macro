@@ -62,7 +62,7 @@ Public Sub CreateTaiwanTransferDocuments()
     End If
     
     bigsellerOutputPath = baseFolder & BIGSELLER_PREFIX & todayStamp & BIGSELLER_EXT
-    taiwanCurrentPath = EnsureTaiwanWorkingFile(IncludeTrailingSlash(ONEDRIVE_FOLDER), IncludeTrailingSlash(TAIWAN_LOG_FOLDER))
+    taiwanCurrentPath = EnsureTaiwanWorkingFile(IncludeTrailingSlash(INVENTORY_FOLDER), IncludeTrailingSlash(TAIWAN_LOG_FOLDER))
     taiwanLogCopyPath = GetAvailableFilePath(IncludeTrailingSlash(TAIWAN_LOG_FOLDER) & GetFileNameOnly(taiwanCurrentPath))
     
     TraceStep "Create Bigseller file"
@@ -76,7 +76,7 @@ Public Sub CreateTaiwanTransferDocuments()
     
     successMessage = "Taiwan transfer documents created successfully." & vbCrLf & vbCrLf & _
                      "Bigseller file:" & vbCrLf & GetFileNameOnly(bigsellerOutputPath) & vbCrLf & vbCrLf & _
-                     "Taiwan OneDrive file renamed to:" & vbCrLf & GetFileNameOnly(taiwanRenamedPath) & vbCrLf & vbCrLf & _
+                     "Taiwan inventory file renamed to:" & vbCrLf & GetFileNameOnly(taiwanRenamedPath) & vbCrLf & vbCrLf & _
                      "Taiwan log copy created:" & vbCrLf & GetFileNameOnly(taiwanLogCopyPath) & vbCrLf & vbCrLf & _
                      "Open both files now?"
     
@@ -327,12 +327,12 @@ Private Function GetLatestDatedFile(ByVal folderPath As String, ByVal prefix As 
     GetLatestDatedFile = bestPath
 End Function
 
-Private Function EnsureTaiwanWorkingFile(ByVal oneDriveFolder As String, ByVal logFolder As String) As String
+Private Function EnsureTaiwanWorkingFile(ByVal inventoryFolder As String, ByVal logFolder As String) As String
     Dim currentPath As String
     
-    currentPath = GetLatestDatedFile(oneDriveFolder, TAIWAN_PREFIX, TAIWAN_EXT)
+    currentPath = GetLatestDatedFile(inventoryFolder, TAIWAN_PREFIX, TAIWAN_EXT)
     If Len(currentPath) = 0 Then
-        Err.Raise vbObjectError + 1002, , "No file matching """ & TAIWAN_PREFIX & """ was found in: " & oneDriveFolder
+        Err.Raise vbObjectError + 1002, , "No file matching """ & TAIWAN_PREFIX & """ was found in: " & inventoryFolder
     End If
     
     EnsureTaiwanWorkingFile = currentPath
@@ -436,7 +436,7 @@ Private Function RenameTaiwanFileWithTimestamp(ByVal sourcePath As String) As St
     Name sourcePath As targetPath
     
     If Not FileExists(targetPath) Then
-        Err.Raise vbObjectError + 1600, , "Failed to rename Taiwan OneDrive file to: " & targetPath
+        Err.Raise vbObjectError + 1600, , "Failed to rename Taiwan inventory file to: " & targetPath
     End If
     
     RenameTaiwanFileWithTimestamp = targetPath
