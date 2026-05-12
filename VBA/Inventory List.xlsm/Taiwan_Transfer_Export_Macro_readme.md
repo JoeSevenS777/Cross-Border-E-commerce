@@ -111,7 +111,7 @@ Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 
 ### 5. 🇹🇼 Taiwan Warehouse File Handling
 
-* Works with OneDrive file:
+* Works with Transfer file:
 
 ```text
 台湾仓库调拨表*.xlsm
@@ -119,12 +119,12 @@ Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 
 * Required behavior:
 
-  * the file **must already exist in OneDrive**
+  * the file **must already exist**
   * if it is missing, the macro shows a clear error message and exits
 
 * Workflow:
 
-  * backup the current OneDrive file to local logs
+  * backup the current file to local logs
   * clear old data
   * write new transfer data
   * rename with timestamp:
