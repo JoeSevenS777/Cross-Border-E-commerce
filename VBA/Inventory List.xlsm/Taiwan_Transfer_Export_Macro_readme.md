@@ -24,10 +24,59 @@ A **production-grade VBA automation system** that:
 
 * Extracts transfer data from multiple inventory sheets
 * Generates **Bigseller import files automatically**
-* Updates **Taiwan warehouse transfer records in OneDrive**
+* Updates **Taiwan warehouse transfer records in the local inventory folder**
+* Archives the previous Taiwan transfer file into a local log folder
 * Handles header variations and operational edge cases robustly
 
 Designed for **real-world cross-border e-commerce operations** where reliability and repeatability matter.
+
+---
+
+## 📂 Current Folder Configuration
+
+The macro now uses a local inventory folder:
+
+```text
+D:\JoeProgramFiles\inventory
+```
+
+The Taiwan log folder is:
+
+```text
+D:\JoeProgramFiles\inventory\Taiwan transfer logs\
+```
+
+Corresponding VBA constants:
+
+```vba
+Private Const INVENTORY_FOLDER As String = "D:\JoeProgramFiles\inventory"
+Private Const TAIWAN_LOG_FOLDER As String = "D:\JoeProgramFiles\inventory\Taiwan transfer logs\"
+```
+
+Required folders:
+
+```text
+D:\JoeProgramFiles\inventory\
+D:\JoeProgramFiles\inventory\Taiwan transfer logs\
+```
+
+Required Taiwan working file pattern:
+
+```text
+台湾仓库调拨表*.xlsm
+```
+
+The Taiwan working file must already exist in:
+
+```text
+D:\JoeProgramFiles\inventory\
+```
+
+Example:
+
+```text
+D:\JoeProgramFiles\inventory\台湾仓库调拨表20260512153000.xlsm
+```
 
 ---
 
@@ -37,7 +86,7 @@ Designed for **real-world cross-border e-commerce operations** where reliability
 
 * One-click execution
 * Multi-sheet scanning
-* Full pipeline: **detect → extract → generate → archive → update**
+* Full pipeline: **detect → extract → generate → archive → update → rename**
 
 ---
 
@@ -46,9 +95,11 @@ Designed for **real-world cross-border e-commerce operations** where reliability
 * Scans sheets:
 
   * 采菁 / 萌睫 / Flortte / 魔仙 / 夹子 / 其他备货
+
 * Detects rows where:
 
   * `action = transfer` (case-insensitive)
+
 * Works only on:
 
   * **visible rows (respects filters)**
@@ -62,7 +113,10 @@ Designed for **real-world cross-border e-commerce operations** where reliability
 
   * spaces
   * line breaks
+  * tabs
   * casing
+  * non-breaking spaces
+
 * Prevents breakage when columns are rearranged
 
 ---
@@ -78,7 +132,7 @@ Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 * Structure:
 
   * Sheet name: `SKU`
-  * Exact required headers (row 1):
+  * Exact required headers in row 1:
 
 | Column Order | Header                                                |
 | ------------ | ----------------------------------------------------- |
@@ -111,7 +165,7 @@ Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 
 ### 5. 🇹🇼 Taiwan Warehouse File Handling
 
-* Works with Transfer file:
+* Works with this transfer file pattern:
 
 ```text
 台湾仓库调拨表*.xlsm
@@ -119,15 +173,17 @@ Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 
 * Required behavior:
 
-  * the file **must already exist**
+  * the file **must already exist** in `D:\JoeProgramFiles\inventory\`
   * if it is missing, the macro shows a clear error message and exits
 
 * Workflow:
 
-  * backup the current file to local logs
+  * find the latest valid timestamped Taiwan transfer file
+  * back up the current file to local logs
   * clear old data
   * write new transfer data
-  * rename with timestamp:
+  * save the updated file
+  * rename it with a new timestamp:
 
 ```text
 台湾仓库调拨表YYYYMMDDHHMMSS.xlsm
@@ -138,11 +194,12 @@ Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 ### 6. ♻️ Safe File Management
 
 * Uses **Recycle Bin** for old Bigseller files
+* Creates a backup of the Taiwan file before updating it
 * Auto-handles:
 
-  * open file conflicts
   * duplicate filenames
-  * old dated file cleanup
+  * old dated Bigseller file cleanup
+  * open workbook conflicts inside the current Excel instance
 
 ---
 
@@ -153,7 +210,9 @@ Stops execution with clear messages when:
 * folder missing
 * sheet missing
 * header missing
-* required Taiwan OneDrive file missing
+* required Taiwan inventory file missing
+* output file cannot be renamed
+* old file cannot be moved to Recycle Bin
 
 Ensures:
 
@@ -166,9 +225,9 @@ Ensures:
 The final workflow is intentionally split:
 
 * **Bigseller** → always create a fresh timestamped export file
-* **Taiwan** → update the existing OneDrive working file, archive a local log copy, then rename the OneDrive file with a timestamp
+* **Taiwan** → update the existing local inventory working file, archive a local log copy, then rename the updated file with a timestamp
 
-This makes it suitable for **daily operational use** while keeping the Taiwan side compatible with the OneDrive workflow.
+This makes it suitable for **daily operational use** while keeping the Taiwan side traceable and recoverable through local logs.
 
 ---
 
@@ -179,7 +238,7 @@ This makes it suitable for **daily operational use** while keeping the Taiwan si
 | Source | Target                  |
 | ------ | ----------------------- |
 | SKU    | *Merchant SKU(Required) |
-| 数量     | *Transfer Qty(Required) |
+| 数量   | *Transfer Qty(Required) |
 
 Additional fixed values:
 
@@ -193,41 +252,50 @@ Additional fixed values:
 
 ### Taiwan Warehouse
 
-| Source      | Target |
-| ----------- | ------ |
+| Source      | Target   |
+| ----------- | -------- |
 | SKU         | SKU编号  |
-| GTIN        | GTIN   |
-| Daily Sales | 预测日销量  |
-| Total Stock | 台湾库存   |
-| 数量          | 调拨数量   |
-| shelf       | 台湾货架位  |
+| GTIN        | GTIN     |
+| Daily Sales | 预测日销量 |
+| Total Stock | 台湾库存 |
+| 数量        | 调拨数量 |
+| shelf       | 台湾货架位 |
 
 ---
 
 ## 🚀 Execution Flow
 
-1. Scan all sheets
-2. Extract transfer rows
-3. Create Bigseller file (timestamped)
-4. Recycle old Bigseller files
-5. Backup current Taiwan OneDrive file to local logs
-6. Update Taiwan file
-7. Rename Taiwan file (timestamp)
-8. Prompt user to open outputs
+1. Validate required folders
+2. Scan all source sheets
+3. Extract visible transfer rows
+4. Create Bigseller file (timestamped)
+5. Recycle old Bigseller files
+6. Find the latest Taiwan inventory file
+7. Back up the current Taiwan file to the local log folder
+8. Update the Taiwan file with new transfer data
+9. Rename the updated Taiwan file with a timestamp
+10. Prompt user to open outputs
 
 ---
 
 ## 📂 Folder Structure
 
 ```text
-Inventory Folder
+D:\JoeProgramFiles\inventory\
+│
+├── 台湾仓库调拨表YYYYMMDDHHMMSS.xlsm
+│
+└── Taiwan transfer logs\
+    └── 台湾仓库调拨表YYYYMMDDHHMMSS.xlsm
+```
+
+The Bigseller output file is created in the same folder as `Inventory List.xlsm`:
+
+```text
+[Folder containing Inventory List.xlsm]\
 │
 ├── Inventory List.xlsm
-├── Bigseller调拨导入*.xlsx
-├── Taiwan transfer logs/
-│
-└── (OneDrive)
-    └── 台湾仓库调拨表*.xlsm
+└── Bigseller调拨导入YYYYMMDDHHMMSS.xlsx
 ```
 
 ---
@@ -237,7 +305,8 @@ Inventory Folder
 * **Idempotent enough for daily use**
 * **Deterministic** → same input = same output structure
 * **Fail-fast** → stops early on missing requirements
-* **Minimal dependencies** → no external libraries
+* **Traceable** → Taiwan files are backed up before being updated
+* **Minimal dependencies** → no external libraries required
 
 ---
 
@@ -249,6 +318,7 @@ This macro is ideal if you:
 * use Bigseller ERP
 * manage Taiwan warehouse stock
 * want to eliminate manual Excel work
+* want a local-file workflow with timestamped backups
 
 ---
 
@@ -265,8 +335,24 @@ This macro is ideal if you:
 
 * Taiwan prerequisite:
 
-  * `台湾仓库调拨表*.xlsm` must already exist in `C:\Users\zouzh\OneDrive\`
-  * the macro will not rebuild it from logs or create a blank replacement
+  * `台湾仓库调拨表*.xlsm` must already exist in `D:\JoeProgramFiles\inventory\`
+  * the macro will not rebuild it from logs
+  * the macro will not create a blank Taiwan replacement automatically
+
+* The Taiwan log folder must already exist:
+
+```text
+D:\JoeProgramFiles\inventory\Taiwan transfer logs\
+```
+
+---
+
+## ⚠️ Known Limitations
+
+* Files opened in another Excel process may still block copy/rename operations
+* If the Taiwan file updates successfully but rename fails, the data is already updated but the filename may remain unchanged
+* The macro selects the latest Taiwan file based on the numeric timestamp in the filename
+* The Taiwan log folder is validated but not automatically created
 
 ---
 
@@ -279,8 +365,10 @@ This macro is ideal if you:
 ## 🧭 Future Enhancements (Optional)
 
 * Add execution log file
+* Automatically create the Taiwan log folder if missing
 * Add UI button inside Excel ribbon
 * Add bilingual README (EN + 中文)
+* Add stricter validation for blank transfer quantities
 
 ---
 
