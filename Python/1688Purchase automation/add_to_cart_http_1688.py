@@ -7,6 +7,8 @@ import msvcrt
 
 import pandas as pd
 import requests
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
 
 from config import (
     PICKLIST_FOLDER,
@@ -515,22 +517,37 @@ def process_workbook(plan_path: str, purchase_type: str = ""):
     #  0. FAILED + Spec ID 为空
     #  1. FAILED (其它原因，不含 备货)
     #  2. 其它未知状态 / DRY_RUN
-    #  3. SUCCESS
-    #  4. FAILED + 备货
+    #  3. 拣货备注不为空
+    #  4. SUCCESS
+    #  5. FAILED + 备货
+
+    pick_remark_col = find_column_by_exact_name(df.columns, "拣货备注")
+    if pick_remark_col is None:
+        pick_remark_col = "拣货备注"
+        df[pick_remark_col] = ""
 
     def _sort_key(row):
         status = str(row[status_col]).strip()
         remark = str(row[remark_col]).strip()
+        pick_remark = str(row[pick_remark_col]).strip()
+        has_pick_remark = bool(pick_remark and pick_remark.lower() not in ("nan", "none"))
 
-        if status == "FAILED":
-            if remark == "备货":
-                return 4
-            if remark.startswith("Spec ID 为空"):
-                return 0
+        if status == "FAILED" and remark.startswith("Spec ID 为空"):
+            return 0
+
+        if status == "FAILED" and remark != "备货":
             return 1
 
-        if status == "SUCCESS":
+        # Any row with non-empty 拣货备注 should form its own attention group,
+        # regardless of SUCCESS / FAILED / 备货.
+        if has_pick_remark:
             return 3
+
+        if status == "SUCCESS":
+            return 4
+
+        if status == "FAILED" and remark == "备货":
+            return 5
 
         # DRY_RUN 或其它未知
         return 2
@@ -560,6 +577,38 @@ def process_workbook(plan_path: str, purchase_type: str = ""):
     base, ext = os.path.splitext(plan_path)
     out_path = base + "(done)" + ext
     df.to_excel(out_path, index=False)
+
+    # 6.1) 只有当 拣货备注 列存在非空单元格时，才标红表头和非空单元格
+    try:
+        red_fill = PatternFill(fill_type="solid", fgColor="FFFF0000")
+        wb = load_workbook(out_path)
+        ws = wb.active
+
+        pick_col_idx = None
+        pick_header_cell = None
+        for cell in ws[1]:
+            if str(cell.value).strip() == "拣货备注":
+                pick_col_idx = cell.column
+                pick_header_cell = cell
+                break
+
+        if pick_col_idx is not None:
+            non_empty_cells = []
+            for row_idx in range(2, ws.max_row + 1):
+                cell = ws.cell(row=row_idx, column=pick_col_idx)
+                value = str(cell.value).strip() if cell.value is not None else ""
+                if value and value.lower() not in ("nan", "none"):
+                    non_empty_cells.append(cell)
+
+            if non_empty_cells:
+                pick_header_cell.fill = red_fill
+                for cell in non_empty_cells:
+                    cell.fill = red_fill
+
+        wb.save(out_path)
+    except Exception as e:
+        print("[WARN] 标红 拣货备注 时出错（不影响结果文件生成）:", e)
+
     print("全部处理完成，结果已保存到:", out_path)
 
     # 7) 把原始表和结果表移动到 Finished_added_to_cart 目录
