@@ -1,240 +1,334 @@
-# 1688 Automation Suite – DXM & 1688 HTTP Automation
+# 1688 Add-to-Cart Script – DXM Picklist → Mapping_Data → 1688 Cart
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue)
 ![Status](https://img.shields.io/badge/Status-Production-green)
 ![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey)
 ![Automation](https://img.shields.io/badge/Automation-DXM→1688-success)
+![Mode](https://img.shields.io/badge/Mode-Wholesale%20%7C%20Consign-orange)
+![Output](https://img.shields.io/badge/Output-Done%20Workbook-blueviolet)
 ![License](https://img.shields.io/badge/License-Private-important)
 
-A modular automation toolkit for Dianxiaomi (DXM) and 1688, covering the full workflow from DXM 拣货单导出 → Mapping 数据维护 → 1688 加购 — all via pure HTTP, no Selenium.
+A focused Python automation script for converting a Dianxiaomi (DXM) picklist workbook into 1688 add-to-cart operations.  
+It reads the latest pending `.xlsx` workbook, applies `Mapping_Data.xlsx`, validates required fields, calls the 1688 add-to-cart endpoint, writes a sorted `(done).xlsx` result workbook, highlights important `拣货备注` rows, and archives processed files.
 
 ---
 
 ## 🚀 Key Features
 
-- End-to-end DXM → 1688 automation
-- Fast, browserless, stable HTTP workflow
-- Automatic Mapping_Data maintenance
-- Automatic 1688 加购 via official endpoints
-- Complete DXM export & batch audit engine
-- Case-insensitive SKU mapping (robust)
-- DRY-RUN safety mode via config.py
+- Automatically detects the latest unprocessed `.xlsx` picklist
+- Supports DXM raw export → `Mapping_Data.xlsx` field mapping
+- Case-insensitive SKU matching
+- Supports both 批发 / wholesale mode and 代发 / consign mode
+- Validates `商品链接`, `Spec ID`, `数量`, and `商品ID`
+- Skips or marks special `备货 / 備貨` rows
+- Sends authenticated HTTP requests to 1688 cart API
+- Supports DRY-RUN mode through `config.py`
+- Generates a clean `(done).xlsx` result workbook
+- Sorts result rows by operational priority
+- Highlights non-empty `拣货备注` cells and their header in red
+- Moves source and result files to `Finished_added_to_cart`
 
 ---
 
-## 🧩 Modules Overview
+## 🧩 Script Role in the Workflow
 
-| Module | Function |
-|--------|----------|
-| config.py | Central configuration file |
-| scrape_1688_http.py | Scrapes 1688 Spec ID / SKU / 店铺名称 |
-| update_mapping_from_scrape.py | Maintains Mapping_Data.xlsx |
-| dxm_export_and_audit.py | Exports DXM picklists + auditing |
-| add_to_cart_http_1688.py | Maps SKUs and performs 1688 加购 |
-| ADD ALL DXM to CART (AUTO).bat | One-click pipeline runner (DXM → 1688) |
-
----
-
-## 🧱 System Architecture
-
-    DXM Pending Orders
+```text
+DXM Picklist Workbook
         │
-        ├── dxm_export_and_audit.py
-        │       └── Export & summarize picklist
+        ▼
+add_to_cart_http_1688.py
         │
-    1688 商品链接
-        │
-        ├── scrape_1688_http.py
-        │       └── Extract Spec ID, 属性SKU, 店铺信息
-        │
-        ├── update_mapping_from_scrape.py
-        │       └── Update Mapping_Data.xlsx
-        │
-    DXM Picklist → Batch_added_to_cart
-        │
-        └── add_to_cart_http_1688.py
-                ├── SKU → 1688 字段映射
-                ├── Send Add-to-Cart HTTP requests
-                └── Generate (done).xlsx + archive
+        ├── Load latest .xlsx from PICKLIST_FOLDER
+        ├── Apply Mapping_Data.xlsx if needed
+        ├── Validate 商品链接 / Spec ID / 数量
+        ├── Detect 备货 rows
+        ├── Submit add-to-cart HTTP requests
+        ├── Generate sorted (done).xlsx
+        ├── Highlight 拣货备注 when needed
+        └── Move files to Finished_added_to_cart
+```
 
 ---
 
-## ⚙️ config.py — Central Configuration
+## 📁 Required Files and Folders
 
-Defines all paths and behavior switches:
+The script depends on paths defined in `config.py`.
 
-- PICKLIST_FOLDER
-- SCRAPE_FOLDER
-- MAPPING_PATH
-- ALI_COOKIE_PATH / DXM_COOKIE_PATH
-- DRY_RUN
-- ENABLE_AUDIT
-- ENABLE_ADD_TO_CART
-- ENABLE_ID_SCRAPE
-- USER_AGENT
-- TIMEOUT
+Recommended structure:
 
-All modules load their configuration from here.
-
----
-
-## 🕸 scrape_1688_http.py — 1688 Product Scraper
-
-Scrapes 1688 product pages and extracts:
-
-- 商品链接
-- 商品ID (offerId)
-- Spec ID
-- 属性SKU
-- 店铺名称
-
-Highlights:
-
-- Robust parsing via brace-matched JSON extraction
-- Writes raw HTML snapshots when parsing fails
-- Produces normalized scraped(done).xlsx files
-
-Usage:
-
-    python scrape_1688_http.py
-
-Place Excel with 商品链接 under ID_Scrape/.
+```text
+AutomationRoot/
+├── config.py
+├── add_to_cart_http_1688.py
+├── Mapping_Data/
+│   └── Mapping_Data.xlsx
+├── Batch_added_to_cart/
+│   ├── pending_picklist.xlsx
+│   └── Finished_added_to_cart/
+└── Cookies/
+    └── ali_cookie.txt
+```
 
 ---
 
-## 🧬 update_mapping_from_scrape.py — Mapping_Data Updater
+## ⚙️ Configuration
 
-Maintains Mapping_Data.xlsx by:
+The script imports these values from `config.py`:
 
-- Inferring 商品選項貨號 prefixes from samples
-- Filling missing option codes
-- Appending new mappings without duplicates
-- Keeping the Excel view on the newest rows
-
-Usage:
-
-    python update_mapping_from_scrape.py
-
-Outputs:
-
-- Updated Mapping_Data.xlsx
-- Updated B(done).xlsx
+| Config Name | Purpose |
+|---|---|
+| `PICKLIST_FOLDER` | Folder containing DXM picklist workbooks |
+| `MAPPING_PATH` | Path to `Mapping_Data.xlsx` |
+| `ALI_COOKIE_PATH` | Path to 1688 cookie file |
+| `USER_AGENT` | Browser user-agent string |
+| `ENABLE_ADD_TO_CART` | Enables real add-to-cart requests |
+| `TIMEOUT` | HTTP request timeout |
 
 ---
 
-## 📦 dxm_export_and_audit.py — DXM Export & Audit Engine
+## 🍪 1688 Cookie Priority
 
-Two modes:
+The script searches for 1688 cookies in this order:
 
-### Mode 1 — Export all pending orders
+1. Environment variable `ALI_COOKIE`
+2. `ali_cookie.txt` in the script directory
+3. `ali_cookie.txt` in `PICKLIST_FOLDER`
+4. `ALI_COOKIE_PATH` from `config.py`
+5. The internal `COOKIE` constant in the script
 
-    python dxm_export_and_audit.py
-    # Choose “1”
-
-- Fetches all 待审核 orders
-- Creates DXM export tasks
-- Downloads picklists
-- Summarizes SKU quantities
-- Optionally audits packages
-
-### Mode 2 — Export from custom order workbook
-
-    python dxm_export_and_audit.py
-    # Choose “2”
-
-Reads order IDs from ORDER_IDS_DIR and exports only related pending packages.
-
-DRY_RUN = True prevents auditing but still exports.
+> Directly pasting cookies into the script is supported but not recommended.
 
 ---
 
-## 🛒 add_to_cart_http_1688.py — 1688 Add-to-Cart Engine
+## 📥 Input Workbook Requirements
 
-Final stage: converting DXM picklists into 1688 add-to-cart operations.
+The input workbook should contain at least:
 
-### Pipeline auto-confirm (recommended)
+| Column | Required | Notes |
+|---|---:|---|
+| `SKU` | Yes | Used for Mapping_Data matching |
+| `数量` | Yes | Must be a positive integer |
+| `商品链接` | If already mapped | Used to extract offer ID |
+| `Spec ID` | If already mapped | Required by 1688 add-to-cart API |
+| `拣货备注` | Optional | Non-empty rows are highlighted and sorted into an attention group |
 
-When you run the end-to-end pipeline via `ADD ALL DXM to CART (AUTO).bat`, the add-to-cart script can skip the manual **Y confirmation** *only when the picklist is the one DXM just exported*.
-
-Mechanism (time-based freshness check):
-
-- The `.bat` records a pipeline start timestamp into environment variable `PIPELINE_START_EPOCH` (epoch seconds).
-- `add_to_cart_http_1688.py` selects the newest `.xlsx` in `PICKLIST_FOLDER`.
-- It auto-confirms only if the newest workbook’s `LastWriteTime` is **>=** `PIPELINE_START_EPOCH` (i.e., created/updated during the current pipeline run).
-
-Optional controls:
-
-- `AUTO_CONFIRM_LATEST=1` enables a fallback “freshness window” auto-confirm.
-- `AUTO_CONFIRM_WINDOW_SEC` (default 900 seconds / 15 minutes) tightens/loosens the fallback.
-
-Safety behavior:
-
-- If DXM exported **no new picklist**, the recommended `.bat` will **skip** running `add_to_cart_http_1688.py`, preventing accidental processing of an older file.
-
-
-### Workflow
-
-1. Detect latest .xlsx in Batch_added_to_cart  
-2. Apply Mapping_Data.xlsx (case-insensitive SKU matching)  
-3. Validate Spec ID / 数量  
-4. Skip 备货 rows  
-5. Build HTTP payload for 1688 Add-to-Cart API  
-6. Submit request (or DRY RUN)  
-7. Sort results:
-       0 = FAILED (Spec ID empty)
-       1 = FAILED (other)
-       2 = UNKNOWN / DRY_RUN
-       3 = SUCCESS
-       4 = FAILED (备货)
-8. Save “(done).xlsx”  
-9. Move source + done file to Finished_added_to_cart  
-10. Ask user whether to open result
-
-### CLI
-
-    python add_to_cart_http_1688.py
-    python add_to_cart_http_1688.py consign
-    python add_to_cart_http_1688.py daifa
-    python add_to_cart_http_1688.py 代发
+If the workbook does **not** already contain `商品链接` and `Spec ID`, the script treats it as a DXM raw export and applies `Mapping_Data.xlsx`.
 
 ---
 
-## 📁 Recommended Folder Structure
+## 🧬 Mapping_Data.xlsx Requirements
 
-    AutomationRoot/
-    ├── config.py
-    ├── Mapping_Data/
-    │     └── Mapping_Data.xlsx
-    ├── Batch_added_to_cart/
-    │     └── Finished_added_to_cart/
-    ├── ID_Scrape/
-    │     └── debug_html/
-    ├── Cookies/
-    │     ├── ali_cookie.txt
-    │     └── dxm_cookie.txt
-    ├── scrape_1688_http.py
-    ├── update_mapping_from_scrape.py
-    ├── dxm_export_and_audit.py
-    └── add_to_cart_http_1688.py
+`Mapping_Data.xlsx` should contain these columns:
+
+| Column | Purpose |
+|---|---|
+| `商品選項貨號` / `商品选项货号` | SKU key |
+| `商品链接` | 1688 product link |
+| `商品ID` | 1688 offer ID |
+| `属性SKU` | Attribute SKU |
+| `SKU ID` | SKU ID |
+| `Spec ID` | 1688 Spec ID |
+| `主供应商` | Main supplier |
+
+The script normalizes the key column into `SKU` internally and matches SKUs case-insensitively.
 
 ---
 
-## 🔧 Requirements
+## 🛒 Add-to-Cart Behavior
 
-- Python 3.10+
-- Install packages:
+For each valid row, the script builds and submits a POST request to:
 
-      pip install pandas requests openpyxl
+```text
+https://cart.1688.com/ajax/safe/add_to_cart_list_new.jsx
+```
 
-- Cookies:
-  - ali_cookie.txt or env ALI_COOKIE
-  - dxm_cookie.txt or env DXM_COOKIE
+The request includes:
+
+- `cargoIdentity`
+- `specId`
+- `amount`
+- `purchaseType`
+- timestamp
+- cookie-authenticated headers
+
+If `ENABLE_ADD_TO_CART = False`, the script does not send the request and marks rows as `DRY_RUN`.
 
 ---
 
-## ⚠️ Disclaimer
+## 🧾 Result Statuses
 
-This system uses authenticated HTTP requests to interact with 1688 and Dianxiaomi APIs.  
-Use it only on accounts you own, and comply with all platform rules and local regulations.
+The output workbook includes:
+
+| Status | Meaning |
+|---|---|
+| `SUCCESS` | Added to cart successfully |
+| `FAILED` | Validation failed or request failed |
+| `DRY_RUN` | Real add-to-cart request was disabled |
+
+The `备注` column explains the reason, such as:
+
+- `加入购物车成功`
+- `Spec ID 为空`
+- `数量错误`
+- `无法从商品链接解析商品ID`
+- `备货`
+- HTTP response snippet or request exception
 
 ---
+
+## 🔀 Result Sorting Order
+
+The result workbook is sorted by operational priority:
+
+| Sort Key | Group |
+|---:|---|
+| `0` | `FAILED` + `Spec ID 为空` |
+| `1` | `FAILED` other errors, excluding `备货` |
+| `2` | `UNKNOWN / DRY_RUN` without `拣货备注` |
+| `3` | Any row with non-empty `拣货备注` |
+| `4` | `SUCCESS` without `拣货备注` |
+| `5` | `FAILED` + `备货` without `拣货备注` |
+
+Key rule:
+
+```text
+Any row with non-empty 拣货备注 forms its own attention group,
+regardless of whether it is SUCCESS, FAILED, or 备货.
+```
+
+---
+
+## 🔴 Red Highlighting Rule
+
+The script highlights `拣货备注` only when needed.
+
+```text
+If 拣货备注 has at least one non-empty cell:
+    fill the 拣货备注 header in red
+    fill each non-empty 拣货备注 cell in red
+
+If 拣货备注 is completely empty:
+    do not fill the header
+    do not fill any cell
+```
+
+This makes special picking notes visually obvious without adding unnecessary red formatting to ordinary files.
+
+---
+
+## ▶️ Usage
+
+Default wholesale mode:
+
+```bash
+python add_to_cart_http_1688.py
+```
+
+Consign mode:
+
+```bash
+python add_to_cart_http_1688.py consign
+```
+
+Alternative consign arguments:
+
+```bash
+python add_to_cart_http_1688.py consign_purchase_type
+python add_to_cart_http_1688.py daifa
+python add_to_cart_http_1688.py 代发
+```
+
+---
+
+## ✅ Safety Confirmation
+
+Before real add-to-cart execution, the script asks for confirmation:
+
+```text
+Press Y/y to continue.
+Press any other key to cancel.
+```
+
+When triggered by the full pipeline `.bat`, the script can auto-confirm only if the newest workbook was freshly exported during the current pipeline run.
+
+Supported environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `PIPELINE_START_EPOCH` | Confirms the file was created after the pipeline started |
+| `AUTO_CONFIRM_LATEST` | Enables fallback auto-confirm for newest files |
+| `AUTO_CONFIRM_WINDOW_SEC` | Freshness window in seconds, default `900` |
+
+---
+
+## 📤 Output
+
+For an input file:
+
+```text
+jianhuodan.xlsx
+```
+
+The script creates:
+
+```text
+jianhuodan(done).xlsx
+```
+
+Then it moves both files to:
+
+```text
+Finished_added_to_cart/
+```
+
+If a file with the same name already exists, the script appends a timestamp to avoid overwriting.
+
+---
+
+## 📦 Dependencies
+
+Install required Python packages:
+
+```bash
+pip install pandas requests openpyxl
+```
+
+Recommended Python version:
+
+```text
+Python 3.10+
+```
+
+---
+
+## 🧠 Operational Logic Summary
+
+```text
+Find latest workbook
+→ Apply mapping if needed
+→ Validate each row
+→ Mark 备货 rows
+→ Add valid rows to 1688 cart
+→ Write result workbook
+→ Sort by attention priority
+→ Highlight 拣货备注 when non-empty
+→ Move files to Finished_added_to_cart
+→ Ask whether to open result
+```
+
+---
+
+## ⚠️ Important Notes
+
+- Use only on accounts and data you are authorized to operate.
+- Keep cookies private.
+- Test with `ENABLE_ADD_TO_CART = False` before running real add-to-cart operations.
+- The script processes only the latest unprocessed `.xlsx` workbook in `PICKLIST_FOLDER`.
+- Files containing `(done)` in the filename are ignored as input.
+
+---
+
+## 🔒 License
+
+Private internal business automation script.  
+Not intended for public distribution.
