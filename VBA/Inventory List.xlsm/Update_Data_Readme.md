@@ -87,6 +87,7 @@ Each run automatically updates the following sheets if they exist:
 * `采菁`
 * `萌睫`
 * `Flortte`
+* `MJSP`
 * `魔仙`
 * `夹子`
 
