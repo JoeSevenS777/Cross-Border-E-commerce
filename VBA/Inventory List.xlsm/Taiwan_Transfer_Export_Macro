@@ -43,7 +43,7 @@ Public Sub CreateTaiwanTransferDocuments()
     SetAppState False
     TraceStep "Start macro"
     
-    sourceSheetNames = Array("采菁", "萌睫", "Flortte", "魔仙", "夹子", "其他备货")
+    sourceSheetNames = Array("采菁", "萌睫", "Flortte", "MJSP", "魔仙", "夹子", "其他备货")
     todayStamp = Format(Now, "yyyymmddhhnnss")
     baseFolder = IncludeTrailingSlash(ThisWorkbook.Path)
     
