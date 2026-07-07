@@ -52,7 +52,7 @@ Public Sub UpdateInventoryNEW()
     Set wbInv = ThisWorkbook
 
     ' Sheets to update
-    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "Flortte", "魔仙", "夹子", "其他备货")
+    SHEETS_TO_UPDATE = Array("采菁", "萌睫", "Flortte", "MJSP", "魔仙", "夹子", "其他备货")
 
     ' -------- Speed up --------
     scrn = Application.ScreenUpdating
