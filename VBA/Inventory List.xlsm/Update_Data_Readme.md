@@ -90,7 +90,7 @@ Each run automatically updates the following sheets if they exist:
 * `MJSP`
 * `魔仙`
 * `夹子`
-
+* `其他备货`
 No active-sheet dependency exists.
 
 ---
