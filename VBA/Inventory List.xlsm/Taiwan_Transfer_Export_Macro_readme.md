@@ -94,7 +94,7 @@ D:\JoeProgramFiles\inventory\台湾仓库调拨表20260512153000.xlsm
 
 * Scans sheets:
 
-  * 采菁 / 萌睫 / Flortte / 魔仙 / 夹子 / 其他备货
+  * 采菁 / 萌睫 / Flortte / MJSP / 魔仙 / 夹子 / 其他备货
 
 * Detects rows where:
 
