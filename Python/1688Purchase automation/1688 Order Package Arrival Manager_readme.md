@@ -72,51 +72,78 @@ Only `Y / y` proceeds. Anything else exits safely.
 
 ### Mode 2 — Paste arrival info (WeChat‑friendly)
 
-Paste raw arrival messages such as:
+Paste the complete raw arrival text, even when it contains dates, image filenames, unrelated numbers, blank lines, or inconsistent formatting:
 
 ```
-【承运公司】圆通速递(YTO)
-【运单号】YT7598163190233
-恒志达，齐
+乐购易
+2026年09月03日 18:18
+韵达快递 435337210043705蓝蕴，齐
+
+乐购易
+2026年09月03日 18:57
+中通快递(ZTO) 79030031408885
+美妆，已申请退款
 ```
 
 Rules:
 
-* Paste freely
-* Press **Enter twice** to finish
+* Choose Mode `2`
+* Paste all arrival text into the terminal
+* Blank lines are accepted as part of the pasted text
+* After the pasted text, press **Enter** to start a new line
+* Type `END` on that separate line and press **Enter**
+* The workbook is updated and saved automatically—no confirmation is required
+
+Example:
+
+```
+Enter 1 or 2: 2
+Paste arrival text. Type END on a separate line to save automatically:
+
+乐购易
+2026年09月03日 18:18
+韵达快递 435337210043705蓝蕴，齐
+
+END
+```
 
 #### What happens
 
-* Text is parsed into arrival blocks
-* Matching is done **by 运单号 only**
-* If a 运单号 maps to multiple orders, **all rows are updated**
-
-#### Arrival status inference (conservative)
-
-| Note contains | 到达情况 |
-| ------------- | ---- |
-| 退款            | 退款   |
-| 退货            | 退货   |
-| 异常 / 丢        | 异常   |
-| otherwise     | 已到达  |
+* Reads only rows whose `运单号` is present and `到达情况` is blank
+* Uses those pending tracking numbers as a whitelist
+* Searches for each pending tracking number anywhere in the pasted text
+* Ignores dates, timestamps, image filenames, sender names, and unrelated numbers
+* Supports numeric and letter‑number tracking numbers, full‑width characters, mixed case, and accidental spaces
+* Marks every matched pending row as `已到达`
+* If one 运单号 belongs to multiple rows, every blank‑status row is updated
+* Rows with an existing 到达情况 are left unchanged
 
 #### Notes handling
 
-* New notes are **appended**, never overwritten
-* Existing notes are preserved
+* Text after the tracking number on the same line is saved in `备注`
+* If no text follows on that line, the next meaningful line is used as the note
+* If there is no note, `备注` stays blank
+* Notes such as `蓝蕴，齐` and `美妆，已申请退款` do not change the result: the package is still marked `已到达`
+* Existing notes are preserved; a distinct new note is appended once
+* Repeating the same import does not duplicate notes or update completed rows again
 
-#### Completion summary
+#### Saved update record
 
-After processing, the script prints:
+After saving, the script prints every changed row and every pending tracking number that was not found:
 
 ```
-Arrival update summary:
-  Parsed packages: 18
-  Rows updated: 21
-  Unmatched 运单号: 0
+Arrival update record (saved):
+  Pending rows checked: 10
+  Pending tracking numbers checked: 10
+  Tracking numbers found: 8
+  Rows updated: 8
+  Row 5 | 435316139221920 | 已到达 | 备注: 蓝蕴,齐
+  Row 6 | 79026301712135 | 已到达 | 备注: 美妆,已申请退款
+  Still not found: 2
+  - JT3174236048220
+  - 800214560799
 ```
 
-* Unmatched 运单号 (if any) are listed explicitly
 * Workbook opens automatically on success
 
 ---
@@ -169,6 +196,8 @@ Choose:
 * If the workbook is open, the script exits with a clear error
 * No partial writes
 * No silent data loss
+* Existing nonblank arrival statuses are never changed by Mode 2
+* Arrival matching is limited to pending tracking numbers already in the workbook
 
 ---
 
@@ -199,6 +228,21 @@ Fix:
 
 * Close Excel
 * Run again
+
+---
+
+### Mode 2 finds zero tracking numbers
+
+Cause:
+
+* `END` was entered before the arrival text was pasted, or
+* None of the pending tracking numbers appears in the pasted text
+
+Fix:
+
+* Choose Mode `2`
+* Paste the complete arrival text first
+* Type `END` on a new line after the pasted text
 
 ---
 
