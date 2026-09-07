@@ -22,6 +22,9 @@ NOTE:
 """
 
 import os
+import re
+import unicodedata
+import tempfile
 import shutil
 import sys
 import traceback
@@ -73,10 +76,8 @@ def find_all_exports():
 
     if not exports:
         raise FileNotFoundError(
-            "No new export workbook found in the base folder.
-"
-            "Action: Export the on-the-way list from 1688 and place the .xlsx file in the same folder as this script.
-"
+            "No new export workbook found in the base folder.\n"
+            "Action: Export the on-the-way list from 1688 and place the .xlsx file in the same folder as this script.\n"
             "Note: Parsed exports are moved into ./parsed files/, and are not considered new exports."
         )
 
@@ -101,37 +102,15 @@ def normalize_header(header):
 
 
 def normalize_tracking(v) -> str:
-    """Normalize 运单号 values from both Excel cells and pasted text.
-
-    Handles cases like:
-    - Excel stores tracking as number -> float -> '... .0'
-    - scientific notation (indirectly, via float formatting)
-    - spaces
-    """
+    """Normalize without converting text tracking numbers through float."""
     if v is None:
         return ""
-
-    if isinstance(v, str):
-        s = v.strip().replace(" ", "")
-        if s.endswith(".0") and s[:-2].isdigit():
-            s = s[:-2]
-        return s
-
-    if isinstance(v, int):
-        return str(v)
-
-    if isinstance(v, float):
-        if v.is_integer():
-            return str(int(v))
-        s = str(v).strip().replace(" ", "")
-        if s.endswith(".0") and s[:-2].isdigit():
-            s = s[:-2]
-        return s
-
-    s = str(v).strip().replace(" ", "")
-    if s.endswith(".0") and s[:-2].isdigit():
-        s = s[:-2]
-    return s
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    value = re.sub(r"\s+", "", unicodedata.normalize("NFKC", str(v))).upper()
+    if re.fullmatch(r"[0-9]+\.0", value):
+        value = value[:-2]
+    return value
 
 
 # -------------------------------------------------------------------
@@ -335,167 +314,132 @@ def write_clean(rows, preserved):
 # Step 4: Apply arrival text updates
 # -------------------------------------------------------------------
 
-def parse_arrival_blocks(text: str):
-    """Parse pasted arrival text into records.
+def read_arrival_text():
+    """Blank lines are content; only END on its own line finishes input."""
+    print("Paste arrival text. Type END on a separate line to save automatically:")
+    lines = []
+    while True:
+        try:
+            line = input()
+        except EOFError:
+            break
+        if line.strip() == "END":
+            break
+        lines.append(line)
+    return "\n".join(lines)
 
-    Expected repeated blocks like:
-      【承运公司】圆通速递(YTO)
-      【运单号】YT7598163190233
-      恒志达齐
 
-    Notes may span multiple lines until the next 【承运公司】.
-    Returns: list of dicts {carrier, tracking, note}
-    """
-    if not text:
-        return []
+TIMESTAMP = re.compile(r"(?:20[0-9]{2}[年/.-][0-9]{1,2}[月/.-][0-9]{1,2}|[0-9]{1,2}:[0-9]{2})")
+IMAGE = re.compile(r"\[图片\]|【图片】|微信图片|\.(?:dat|jpg|jpeg|png|gif)\b", re.I)
+OTHER_TRACKING = re.compile(r"(?<![A-Z0-9])[A-Z]{0,4}[0-9]{10,}(?![A-Z0-9])", re.I)
+CARRIER = re.compile(r"承运公司|运单号|^(?:中通|圆通|申通|韵达|极兔|安能|信丰|顺丰|邮政|京东)(?:快递|速递|物流)?(?:\([A-Z]+\))?$", re.I)
 
-    # Normalize brackets and whitespace
-    t = text.replace("[", "【").replace("]", "】")
-    lines = [ln.strip() for ln in t.splitlines()]
 
-    records = []
-    carrier = ""
-    tracking = ""
-    note_lines = []
+def find_pending_arrivals(text, pending):
+    """Whitelist matching; surrounding message structure only determines remarks."""
+    lines = [unicodedata.normalize("NFKC", line).strip() for line in text.splitlines()]
+    meaningful = [i for i, line in enumerate(lines) if line]
+    senders = {lines[meaningful[n-1]] for n, i in enumerate(meaningful)
+               if n and TIMESTAMP.match(lines[i])}
+    senders.add("乐购易")
+    patterns = {key: re.compile(r"(?<![A-Z0-9])" +
+                r"[ \t]*".join(re.escape(c) for c in key) +
+                r"(?![A-Z0-9])", re.I) for key in pending}
+    found = {}
 
-    def flush():
-        nonlocal carrier, tracking, note_lines
-        if tracking:
-            records.append({
-                "carrier": carrier.strip(),
-                "tracking": tracking.strip(),
-                "note": "\n".join([x for x in note_lines if x.strip()]).strip(),
-            })
-        carrier = ""
-        tracking = ""
-        note_lines = []
+    def noise(line):
+        return (line in senders or TIMESTAMP.match(line) or IMAGE.search(line)
+                or CARRIER.search(line) or OTHER_TRACKING.search(line)
+                or any(p.search(line) for p in patterns.values()))
 
-    for ln in lines:
-        if not ln:
+    for i, line in enumerate(lines):
+        if IMAGE.search(line) or TIMESTAMP.match(line) or line in senders:
             continue
-        if "【承运公司】" in ln:
-            # New block starts
-            flush()
-            carrier = ln.split("【承运公司】", 1)[1].strip()
-            continue
-        if "【运单号】" in ln:
-            tracking = normalize_tracking(ln.split("【运单号】", 1)[1])
-            continue
-        # Otherwise treat as note content
-        note_lines.append(ln)
-
-    flush()
-    # Deduplicate by tracking: if same tracking appears multiple times, merge notes
-    merged = {}
-    for r in records:
-        key = r["tracking"].replace(" ", "")
-        if key not in merged:
-            merged[key] = r
-        else:
-            # merge notes if new
-            n0 = merged[key].get("note", "")
-            n1 = r.get("note", "")
-            if n1 and n1 not in n0:
-                merged[key]["note"] = (n0 + ("\n" if n0 else "") + n1).strip()
-            # prefer carrier if missing
-            if not merged[key].get("carrier") and r.get("carrier"):
-                merged[key]["carrier"] = r["carrier"]
-    return list(merged.values())
-
-
-def infer_status(note: str) -> str:
-    """Infer 到达情况 from note. Conservative rules."""
-    note = (note or "").strip()
-    if not note:
-        return "已到达"
-    if "退款" in note:
-        return "退款"
-    if "退货" in note:
-        return "退货"
-    if "异常" in note or "丢" in note:
-        return "异常"
-    return "已到达"
+        hits = sorted((m.start(), m.end(), key) for key, p in patterns.items()
+                      for m in p.finditer(line))
+        for start, end, key in hits:
+            notes = found.setdefault(key, [])
+            # Stop at the next tracking token, including numbers outside the whitelist.
+            tail = line[end:]
+            next_token = OTHER_TRACKING.search(tail)
+            next_hit = min((h[0]-end for h in hits if h[0] >= end), default=len(tail))
+            cutoff = min(next_hit, next_token.start() if next_token else len(tail))
+            note = tail[:cutoff].strip(" ,，;；:：|、")
+            if not note and cutoff == len(tail):
+                for following in lines[i+1:]:
+                    if not following:
+                        continue
+                    if not noise(following):
+                        note = following
+                    break
+            if note and not noise(note) and note not in notes:
+                notes.append(note)
+    return found
 
 
 def apply_arrival_text(text: str):
-    """Update CLEAN_FILE based on pasted arrival text.
+    """Save pending arrivals automatically, then print the actual saved changes.
 
-    Match is by 运单号. If the same 运单号 maps to multiple orders, update ALL matching rows.
-    Returns: (updated_rows_count, unmatched_tracking_list)
+    Existing nonblank statuses are untouched. Returns (updated row count,
+    pending tracking numbers absent from the pasted text).
     """
-    records = parse_arrival_blocks(text)
-    if not records:
-        return 0, []
-
-    if not os.path.exists(CLEAN_FILE):
-        raise FileNotFoundError(f"{CLEAN_FILE} not found. Run sync mode first.")
-
-    wb = load_workbook(CLEAN_FILE)
-    ws = wb.active
-
-    headers = [normalize_header(c.value) for c in ws[1]]
-    idx = {h: i + 1 for i, h in enumerate(headers)}  # 1-based for openpyxl
-
-    required = ["运单号", "到达情况", "备注"]
-    missing = [h for h in required if h not in idx]
-    if missing:
-        raise ValueError(f"Clean workbook missing columns: {missing}")
-
-    # Optional columns
-    carrier_col = idx.get("物流公司")
-
-    # Build tracking -> row indices list
-    tracking_to_rows = defaultdict(list)
-    for r in range(2, ws.max_row + 1):
-        tval = ws.cell(row=r, column=idx["运单号"]).value
-        if tval is None:
-            continue
-        key = normalize_tracking(tval)
-        if key:
-            tracking_to_rows[key].append(r)
-
-    updated = 0
-    unmatched = []
-
-    for rec in records:
-        tracking = normalize_tracking(rec["tracking"])
-        carrier = (rec.get("carrier") or "").strip()
-        note = (rec.get("note") or "").strip()
-        status = infer_status(note)
-
-        rows = tracking_to_rows.get(tracking)
-        if not rows:
-            unmatched.append(tracking)
-            continue
-
-        for r in rows:
-            # 到达情况
-            ws.cell(row=r, column=idx["到达情况"]).value = status
-
-            # 备注: append if existing and different
-            note_cell = ws.cell(row=r, column=idx["备注"]).value
-            existing = "" if note_cell is None else str(note_cell).strip()
-            if note:
-                if not existing:
-                    ws.cell(row=r, column=idx["备注"]).value = note
-                elif note not in existing:
-                    ws.cell(row=r, column=idx["备注"]).value = (existing + " | " + note)
-
-            # 物流公司: only fill if empty
-            if carrier_col and carrier:
-                cval = ws.cell(row=r, column=carrier_col).value
-                if cval is None or str(cval).strip() == "":
-                    ws.cell(row=r, column=carrier_col).value = carrier
-
-            updated += 1
-
+    path = resolve_path(CLEAN_FILE)
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} not found. Run sync mode first.")
+    wb = load_workbook(path)
     try:
-        wb.save(CLEAN_FILE)
-    except PermissionError:
-        print(f"ERROR: '{CLEAN_FILE}' is currently open in Excel.")
-        print("Please close the workbook in Excel and run the script again.")
-        raise SystemExit(1)
-    return updated, unmatched
+        ws = wb.active
+        idx = {normalize_header(c.value): c.column for c in ws[1]}
+        missing = [h for h in ("运单号", "到达情况", "备注") if h not in idx]
+        if missing:
+            raise ValueError(f"Clean workbook missing columns: {missing}")
+        pending = defaultdict(list)
+        for row in range(2, ws.max_row + 1):
+            status = ws.cell(row, idx["到达情况"]).value
+            if status is not None and str(status).strip():
+                continue
+            key = normalize_tracking(ws.cell(row, idx["运单号"]).value)
+            if key:
+                pending[key].append(row)
+        found = find_pending_arrivals(text, pending)
+        changes = []
+        for key, notes in found.items():
+            for row in pending[key]:
+                cell = ws.cell(row, idx["备注"])
+                existing = "" if cell.value is None else str(cell.value)
+                merged = existing
+                for note in notes:
+                    if note not in [part.strip() for part in merged.split(" | ")]:
+                        merged = merged + " | " + note if merged.strip() else note
+                if merged != existing:
+                    cell.value = merged
+                    cell.data_type = "s"
+                ws.cell(row, idx["到达情况"]).value = "已到达"
+                changes.append((row, key, merged))
+        if changes:
+            # Keep the original intact if writing fails (for example Excel has it open).
+            fd, temp_path = tempfile.mkstemp(suffix=".xlsx", dir=os.path.dirname(path))
+            os.close(fd)
+            try:
+                wb.save(temp_path)
+                os.replace(temp_path, path)
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+        unmatched = [key for key in pending if key not in found]
+        print("\nArrival update record (saved):" if changes else "\nNo changes needed.")
+        print(f"  Pending rows checked: {sum(map(len, pending.values()))}")
+        print(f"  Pending tracking numbers checked: {len(pending)}")
+        print(f"  Tracking numbers found: {len(found)}")
+        print(f"  Rows updated: {len(changes)}")
+        for row, key, note in changes:
+            print(f"  Row {row} | {key} | 已到达 | 备注: {note or '(blank)'}")
+        print(f"  Still not found: {len(unmatched)}")
+        for key in unmatched:
+            print(f"  - {key}")
+        return len(changes), unmatched
+    finally:
+        wb.close()
 
 
 # -------------------------------------------------------------------
@@ -559,37 +503,8 @@ def main():
             return 0
 
         elif choice == "2":
-            print("Paste arrival text, then press Enter twice:")
-            # Stop after TWO consecutive blank lines to make paste-from-WeChat/etc. more forgiving.
-            lines = []
-            blank_streak = 0
-            while True:
-                try:
-                    line = input()
-                except EOFError:
-                    break
-                if line.strip() == "":
-                    blank_streak += 1
-                    if blank_streak >= 2:
-                        break
-                    continue
-                blank_streak = 0
-                lines.append(line.rstrip("\n"))
-
-            text = "
-".join(lines)
-            parsed_packages = len(parse_arrival_blocks(text))
-            updated, unmatched = apply_arrival_text(text)
-
-            print("Arrival update summary:")
-            print(f"  Parsed packages: {parsed_packages}")
-            print(f"  Rows updated: {updated}")
-            print(f"  Unmatched 运单号: {len(unmatched)}")
-
-            if unmatched:
-                print("Unmatched 运单号:")
-                for t in unmatched:
-                    print(f"  - {t}")
+            text = read_arrival_text()
+            apply_arrival_text(text)
 
             # Auto-open workbook on success
             open_clean_workbook()
